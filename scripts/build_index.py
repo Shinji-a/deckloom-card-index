@@ -5,7 +5,6 @@ import sqlite3
 import urllib.request
 from datetime import datetime, timezone
 
-import ijson
 
 
 API_URL = "https://api.scryfall.com/bulk-data"
@@ -105,72 +104,72 @@ def create_database(download_uri, bulk_updated_at):
 
     print("Downloading and streaming Scryfall all_cards...")
 
-    with request(download_uri) as response:
-        cards = ijson.items(response, "item")
+with request(download_uri) as response:
+    for raw_line in response:
+        if not raw_line.strip():
+            continue
 
-        for card in cards:
-            if card.get("lang") != "ja":
-                continue
+        card = json.loads(raw_line.decode("utf-8"))
 
-            oracle_id = card.get("oracle_id")
-            if not oracle_id:
-                continue
+        if card.get("lang") != "ja":
+            continue
 
-            jp_name = japanese_name(card)
+        oracle_id = card.get("oracle_id")
+        if not oracle_id:
+            continue
 
-            if not jp_name:
-                continue
+        jp_name = japanese_name(card)
 
-            color_identity = "".join(card.get("color_identity") or [])
+        if not jp_name:
+            continue
 
-            # 同じOracleカードに日本語版が複数ある場合、
-            # released_atが新しい印刷を代表として残す
-            cur.execute("""
-                INSERT INTO cards (
-                    oracle_id,
-                    scryfall_id,
-                    english_name,
-                    japanese_name,
-                    type_line,
-                    mana_value,
-                    color_identity,
-                    set_code,
-                    collector_number,
-                    released_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        color_identity = "".join(card.get("color_identity") or [])
 
-                ON CONFLICT(oracle_id) DO UPDATE SET
-                    scryfall_id = excluded.scryfall_id,
-                    english_name = excluded.english_name,
-                    japanese_name = excluded.japanese_name,
-                    type_line = excluded.type_line,
-                    mana_value = excluded.mana_value,
-                    color_identity = excluded.color_identity,
-                    set_code = excluded.set_code,
-                    collector_number = excluded.collector_number,
-                    released_at = excluded.released_at
-
-                WHERE excluded.released_at > cards.released_at
-            """, (
+        cur.execute("""
+            INSERT INTO cards (
                 oracle_id,
-                card["id"],
-                card["name"],
-                jp_name,
-                japanese_type(card),
-                card.get("cmc"),
+                scryfall_id,
+                english_name,
+                japanese_name,
+                type_line,
+                mana_value,
                 color_identity,
-                card.get("set"),
-                card.get("collector_number"),
-                card.get("released_at"),
-            ))
+                set_code,
+                collector_number,
+                released_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
-            count += 1
+            ON CONFLICT(oracle_id) DO UPDATE SET
+                scryfall_id = excluded.scryfall_id,
+                english_name = excluded.english_name,
+                japanese_name = excluded.japanese_name,
+                type_line = excluded.type_line,
+                mana_value = excluded.mana_value,
+                color_identity = excluded.color_identity,
+                set_code = excluded.set_code,
+                collector_number = excluded.collector_number,
+                released_at = excluded.released_at
 
-            if count % 5000 == 0:
-                conn.commit()
-                print(f"Processed {count} Japanese printings...")
+            WHERE excluded.released_at > cards.released_at
+        """, (
+            oracle_id,
+            card["id"],
+            card["name"],
+            jp_name,
+            japanese_type(card),
+            card.get("cmc"),
+            color_identity,
+            card.get("set"),
+            card.get("collector_number"),
+            card.get("released_at"),
+        ))
 
+        count += 1
+
+        if count % 5000 == 0:
+            conn.commit()
+            print(f"Processed {count} Japanese printings...")
     conn.commit()
 
     unique_count = cur.execute(
