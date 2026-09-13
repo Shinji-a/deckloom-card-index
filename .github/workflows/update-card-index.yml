@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
 
   schedule:
-    # 毎週月曜 03:17 UTC
-    # 日本時間では月曜 12:17ごろ
-    - cron: "17 3 * * 1"
+    # 毎日 03:17 UTC
+    # 日本時間では 12:17ごろ
+    - cron: "17 3 * * *"
 
 permissions:
   contents: write
