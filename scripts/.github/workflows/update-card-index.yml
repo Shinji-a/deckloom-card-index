@@ -1,0 +1,57 @@
+name: Update DeckLoom Card Index
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # 毎週月曜 03:17 UTC
+    # 日本時間では月曜 12:17ごろ
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ijson
+
+      - name: Build Japanese card index
+        run: |
+          python scripts/build_index.py
+
+      - name: Show generated files
+        run: |
+          ls -lh dist/
+
+      - name: Create latest release if missing
+        run: |
+          gh release view card-index-latest >/dev/null 2>&1 || \
+          gh release create card-index-latest \
+            --title "DeckLoom Card Index - Latest" \
+            --notes "Automatically generated Japanese card search database for DeckLoom."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Upload latest database
+        run: |
+          gh release upload card-index-latest \
+            dist/deckloom-card-index.sqlite \
+            dist/deckloom-card-index.sqlite.gz \
+            dist/manifest.json \
+            --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
