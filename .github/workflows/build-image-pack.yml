@@ -60,19 +60,17 @@ jobs:
             echo "publish=${INPUT_PUBLISH:-false}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Fetch previous manifest
+        if: steps.mode.outputs.publish == 'true'
+        run: |
+          mkdir -p dist
+          curl -fsSL "https://github.com/Shinji-a/deckloom-card-index/releases/download/image-pack-latest/image-manifest.json" -o dist/previous-image-manifest.json || true
+
       - name: Build image pack
         env:
           MAX_IMAGES: ${{ steps.mode.outputs.max_images }}
           WORKERS: ${{ steps.mode.outputs.workers }}
-        run: |
-          python tools/build_image_pack.py --max-images "$MAX_IMAGES" --workers "$WORKERS"
-
-      - name: Publish summary
-        if: always()
-        run: |
-          if [ -f dist/image-pack/summary.md ]; then
-            cat dist/image-pack/summary.md >> "$GITHUB_STEP_SUMMARY"
-          fi
+        run: python tools/build_image_pack.py --max-images "$MAX_IMAGES" --workers "$WORKERS"
 
       - name: Validate publish request
         if: steps.mode.outputs.publish == 'true'
@@ -84,25 +82,34 @@ jobs:
             exit 1
           fi
 
+      - name: Build delta pack
+        if: steps.mode.outputs.publish == 'true'
+        run: python tools/build_image_delta.py
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [ -f dist/image-pack/summary.md ]; then cat dist/image-pack/summary.md >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ -f dist/image-pack/delta-manifest.json ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "## Delta" >> "$GITHUB_STEP_SUMMARY"
+            python -c 'import json,os; p=json.load(open("dist/image-pack/delta-manifest.json")); f=open(os.environ["GITHUB_STEP_SUMMARY"],"a"); f.write("- Changed: {:,}\\n- Removed: {:,}\\n- Delta bytes: {:,}\\n".format(p["changed_count"],p["removed_count"],p["archive_bytes"])); f.close()'
+          fi
+
       - name: Create image pack release if missing
         if: steps.mode.outputs.publish == 'true'
-        run: |
-          gh release view image-pack-latest >/dev/null 2>&1 || \
-          gh release create image-pack-latest \
-            --title "DeckLoom Small Image Pack - Latest" \
-            --notes "Weekly generated optional small-card-image pack for DeckLoom."
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view image-pack-latest >/dev/null 2>&1; then
+            gh release create image-pack-latest --title "DeckLoom Small Image Pack - Latest" --notes "Weekly generated optional small-card-image pack for DeckLoom."
+          fi
 
       - name: Upload latest image pack
         if: steps.mode.outputs.publish == 'true'
-        run: |
-          gh release upload image-pack-latest \
-            dist/image-pack/deckloom-small-images.zip \
-            dist/image-pack/image-manifest.json \
-            --clobber
         env:
           GH_TOKEN: ${{ github.token }}
+        run: gh release upload image-pack-latest dist/image-pack/deckloom-small-images.zip dist/image-pack/image-manifest.json dist/image-pack/image-pack-meta.json dist/image-pack/deckloom-small-images-delta.zip dist/image-pack/delta-manifest.json --clobber
 
       - name: Upload build metadata
         if: always()
@@ -111,7 +118,13 @@ jobs:
           name: deckloom-image-pack-build-${{ github.run_number }}
           path: |
             dist/image-pack/image-manifest.json
+            dist/image-pack/image-pack-meta.json
+            dist/image-pack/delta-manifest.json
             dist/image-pack/summary.md
             dist/image-pack/failed.json
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Cleanup staged images
+        if: always()
+        run: rm -rf dist/image-pack/images

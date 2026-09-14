@@ -867,13 +867,23 @@ def create_database(download_uri, bulk_updated_at):
             VALUES ('card_type', ?, ?, 'manual', 0)
         """, (canonical, localized))
 
-    for canonical, votes in subtype_votes.items():
-        localized, count = votes.most_common(1)[0]
+    for canonical in sorted(subtypes_seen):
+        if canonical in SUBTYPE_JA:
+            localized = SUBTYPE_JA[canonical]
+            source = "manual"
+            count = 0
+        elif subtype_votes.get(canonical):
+            localized, count = subtype_votes[canonical].most_common(1)[0]
+            source = "inferred"
+        else:
+            localized = None
+            source = "fallback_en"
+            count = 0
         cur.execute("""
             INSERT OR REPLACE INTO display_terms
             (category, canonical, japanese, source, source_count)
-            VALUES ('subtype', ?, ?, 'inferred', ?)
-        """, (canonical, localized, count))
+            VALUES ('subtype', ?, ?, ?, ?)
+        """, (canonical, localized, source, count))
 
     for canonical in sorted(keywords_seen):
         if canonical in KEYWORD_JA:
