@@ -1,0 +1,79 @@
+name: Measure small image pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_images:
+        description: "0 = 全画像。動作確認は 500 推奨"
+        required: true
+        default: "500"
+        type: string
+      workers:
+        description: "同時ダウンロード数（4推奨、全体8req/s制限）"
+        required: true
+        default: "4"
+        type: choice
+        options: ["2", "4", "6"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deckloom-image-pack-measure
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Show runner disk space
+        run: df -h
+
+      - name: Measure image pack
+        id: measure
+        continue-on-error: true
+        env:
+          MAX_IMAGES: ${{ inputs.max_images }}
+          WORKERS: ${{ inputs.workers }}
+        run: |
+          python tools/measure_image_pack.py --max-images "$MAX_IMAGES" --workers "$WORKERS"
+
+      - name: Publish report to job summary
+        if: always()
+        run: |
+          if [ -f dist/image-pack-measure/report.md ]; then
+            cat dist/image-pack-measure/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Measurement failed before report generation" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload measurement report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deckloom-image-pack-measure-${{ github.run_number }}
+          path: |
+            dist/image-pack-measure/report.md
+            dist/image-pack-measure/report.json
+            dist/image-pack-measure/failed.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Show final disk space
+        if: always()
+        run: df -h
+
+      - name: Fail if measurement was incomplete
+        if: steps.measure.outcome == 'failure'
+        run: |
+          echo "Measurement had failed image downloads. See failed.txt / job summary."
+          exit 1
