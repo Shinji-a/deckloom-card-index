@@ -1,0 +1,117 @@
+name: Build DeckLoom Small Image Pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_images:
+        description: "0 = 本番全件。動作確認は 500"
+        required: true
+        default: "500"
+        type: string
+      workers:
+        description: "同時ダウンロード数"
+        required: true
+        default: "4"
+        type: choice
+        options: ["2", "4", "6"]
+      publish:
+        description: "image-pack-latest Releaseへ公開する"
+        required: true
+        default: false
+        type: boolean
+  schedule:
+    - cron: "17 4 * * 0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deckloom-small-image-pack
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Resolve run mode
+        id: mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_MAX: ${{ inputs.max_images }}
+          INPUT_WORKERS: ${{ inputs.workers }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: |
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            echo "max_images=0" >> "$GITHUB_OUTPUT"
+            echo "workers=4" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "max_images=${INPUT_MAX:-500}" >> "$GITHUB_OUTPUT"
+            echo "workers=${INPUT_WORKERS:-4}" >> "$GITHUB_OUTPUT"
+            echo "publish=${INPUT_PUBLISH:-false}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build image pack
+        env:
+          MAX_IMAGES: ${{ steps.mode.outputs.max_images }}
+          WORKERS: ${{ steps.mode.outputs.workers }}
+        run: |
+          python tools/build_image_pack.py --max-images "$MAX_IMAGES" --workers "$WORKERS"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [ -f dist/image-pack/summary.md ]; then
+            cat dist/image-pack/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Validate publish request
+        if: steps.mode.outputs.publish == 'true'
+        env:
+          MAX_IMAGES: ${{ steps.mode.outputs.max_images }}
+        run: |
+          if [ "$MAX_IMAGES" != "0" ]; then
+            echo "Refusing to publish a partial image pack."
+            exit 1
+          fi
+
+      - name: Create image pack release if missing
+        if: steps.mode.outputs.publish == 'true'
+        run: |
+          gh release view image-pack-latest >/dev/null 2>&1 || \
+          gh release create image-pack-latest \
+            --title "DeckLoom Small Image Pack - Latest" \
+            --notes "Weekly generated optional small-card-image pack for DeckLoom."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Upload latest image pack
+        if: steps.mode.outputs.publish == 'true'
+        run: |
+          gh release upload image-pack-latest \
+            dist/image-pack/deckloom-small-images.zip \
+            dist/image-pack/image-manifest.json \
+            --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Upload build metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deckloom-image-pack-build-${{ github.run_number }}
+          path: |
+            dist/image-pack/image-manifest.json
+            dist/image-pack/summary.md
+            dist/image-pack/failed.json
+          if-no-files-found: warn
+          retention-days: 14
