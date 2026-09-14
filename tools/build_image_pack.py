@@ -134,7 +134,6 @@ def main():
     (out/"image-manifest.json").write_text(json.dumps(manifest,ensure_ascii=False,separators=(",",":")),encoding="utf-8")
     summary=["# DeckLoom small image pack","",f"- Scryfall Bulk updated: {bulk.get('updated_at','unknown')}",f"- Images: {len(entries):,}",f"- Raw size: {human_bytes(raw)}",f"- ZIP size: {human_bytes(zipped)}",f"- ZIP SHA-256: {manifest['archive_sha256']}",f"- Elapsed: {elapsed/60:.1f} min",f"- Full pack: {manifest['is_full_pack']}"]
     (out/"summary.md").write_text("\n".join(summary)+"\n",encoding="utf-8"); print("\n".join(summary))
-    shutil.rmtree(root,ignore_errors=True)
     return 0
 
 if __name__=="__main__": raise SystemExit(main())
