@@ -132,6 +132,8 @@ def main():
     counts=Counter(v["category"] for v in entries.values())
     manifest={"schema_version":1,"generated_at":datetime.now(timezone.utc).isoformat(),"scryfall_bulk_updated_at":bulk.get("updated_at"),"is_full_pack":a.max_images==0,"selection":selection,"image_count":len(entries),"raw_bytes":raw,"archive":zpath.name,"archive_bytes":zipped,"archive_sha256":sha256_file(zpath),"categories":dict(counts),"entries":{k:entries[k] for k in sorted(entries)}}
     (out/"image-manifest.json").write_text(json.dumps(manifest,ensure_ascii=False,separators=(",",":")),encoding="utf-8")
+    meta={k:v for k,v in manifest.items() if k!="entries"}
+    (out/"image-pack-meta.json").write_text(json.dumps(meta,ensure_ascii=False,separators=(",",":")),encoding="utf-8")
     summary=["# DeckLoom small image pack","",f"- Scryfall Bulk updated: {bulk.get('updated_at','unknown')}",f"- Images: {len(entries):,}",f"- Raw size: {human_bytes(raw)}",f"- ZIP size: {human_bytes(zipped)}",f"- ZIP SHA-256: {manifest['archive_sha256']}",f"- Elapsed: {elapsed/60:.1f} min",f"- Full pack: {manifest['is_full_pack']}"]
     (out/"summary.md").write_text("\n".join(summary)+"\n",encoding="utf-8"); print("\n".join(summary))
     return 0
