@@ -717,6 +717,7 @@ def create_database(download_uri, bulk_updated_at):
     card_state = {}
     token_states = {}
     subtype_votes = defaultdict(Counter)
+    subtypes_seen = set()
     keyword_votes = defaultdict(Counter)
     token_term_votes = defaultdict(Counter)
     keywords_seen = set()
@@ -738,6 +739,13 @@ def create_database(download_uri, bulk_updated_at):
 
                     for keyword in card.get("keywords") or []:
                         keywords_seen.add(keyword)
+
+                    subtype_lines = [card.get("type_line")]
+                    subtype_lines.extend(face.get("type_line") for face in card.get("card_faces") or [])
+                    for type_line in subtype_lines:
+                        en_sub = split_after_dash(type_line)
+                        if en_sub:
+                            subtypes_seen.update(tokenize_english_subtypes(en_sub))
 
                     if card.get("lang") == "ja":
                         collect_subtype_votes(card, subtype_votes)
