@@ -166,6 +166,31 @@ def japanese_name(card):
     return normalize_japanese_card_name(join_faces(card, "printed_name", " // "))
 
 
+def normalized_face_name(value):
+    if not value:
+        return None
+    return normalize_japanese_card_name(str(value)).strip()
+
+
+def collect_card_aliases(card):
+    """Return searchable full-card and face-name aliases with their source."""
+    aliases = {}
+
+    def add(value, lang, source):
+        value = normalized_face_name(value)
+        if not value:
+            return
+        key = (value.casefold() if lang == "en" else value, lang)
+        aliases.setdefault(key, (value, lang, source))
+
+    add(card.get("name"), "en", "full_name")
+    add(card.get("printed_name"), card.get("lang") or "und", "full_name")
+    for face in card.get("card_faces") or []:
+        add(face.get("name"), "en", "face_name")
+        add(face.get("printed_name"), card.get("lang") or "und", "face_name")
+    return list(aliases.values())
+
+
 def japanese_type(card):
     return join_faces(card, "printed_type_line", " // ")
 
@@ -659,6 +684,15 @@ def create_database(download_uri, bulk_updated_at):
             legal_predh TEXT
         );
 
+        CREATE TABLE card_aliases (
+            oracle_id TEXT NOT NULL,
+            alias TEXT NOT NULL,
+            alias_folded TEXT NOT NULL,
+            lang TEXT NOT NULL,
+            source TEXT NOT NULL,
+            PRIMARY KEY (oracle_id, alias, lang, source)
+        );
+
         CREATE TABLE card_sets (
             oracle_id TEXT NOT NULL,
             set_code TEXT NOT NULL,
@@ -708,6 +742,9 @@ def create_database(download_uri, bulk_updated_at):
         );
 
         CREATE INDEX idx_cards_english_name ON cards(english_name COLLATE NOCASE);
+        CREATE INDEX idx_card_aliases_alias ON card_aliases(alias);
+        CREATE INDEX idx_card_aliases_folded ON card_aliases(alias_folded);
+        CREATE INDEX idx_card_aliases_oracle ON card_aliases(oracle_id);
         CREATE INDEX idx_cards_japanese_name ON cards(japanese_name);
         CREATE INDEX idx_cards_mana_value ON cards(mana_value);
         CREATE INDEX idx_cards_power_numeric ON cards(power_numeric);
@@ -776,6 +813,24 @@ def create_database(download_uri, bulk_updated_at):
                     score = preferred_score(card)
                     jp_score = japanese_score(card)
                     canonical = canonical_card_data(card)
+
+                    # Alias index is independent of the representative printing.
+                    # This makes Adventure / split / DFC face names resolvable.
+                    if card.get("lang") in {"en", "ja"}:
+                        for alias, alias_lang, alias_source in collect_card_aliases(card):
+                            if alias_lang not in {"en", "ja"}:
+                                continue
+                            cur.execute("""
+                                INSERT OR IGNORE INTO card_aliases
+                                (oracle_id, alias, alias_folded, lang, source)
+                                VALUES (?, ?, ?, ?, ?)
+                            """, (
+                                oracle_id,
+                                alias,
+                                alias.casefold(),
+                                alias_lang,
+                                alias_source,
+                            ))
 
                     if oracle_id not in seen_oracles:
                         row = {
@@ -946,6 +1001,7 @@ def create_database(download_uri, bulk_updated_at):
     cur.execute("VACUUM")
 
     display_terms_count = cur.execute("SELECT COUNT(*) FROM display_terms").fetchone()[0]
+    alias_count = cur.execute("SELECT COUNT(*) FROM card_aliases").fetchone()[0]
     token_count = cur.execute("SELECT COUNT(*) FROM tokens").fetchone()[0]
     conn.close()
 
@@ -960,7 +1016,7 @@ def create_database(download_uri, bulk_updated_at):
     db_bytes = os.path.getsize(db_path)
     gz_bytes = os.path.getsize(gz_path)
     manifest = {
-        "schema_version": 3,
+        "schema_version": 4,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scryfall_bulk_updated_at": bulk_updated_at,
         "unique_cards": len(seen_oracles),
@@ -968,6 +1024,7 @@ def create_database(download_uri, bulk_updated_at):
         "token_printings_processed": token_printings,
         "unique_tokens": token_count,
         "display_terms": display_terms_count,
+        "card_aliases": alias_count,
         "total_printings_processed": total_printings,
         "database": os.path.basename(db_path),
         "database_bytes": db_bytes,
@@ -984,6 +1041,7 @@ def create_database(download_uri, bulk_updated_at):
     print(f"Japanese printings: {japanese_printings:,}")
     print(f"Unique tokens: {token_count:,}")
     print(f"Display terms: {display_terms_count:,}")
+    print(f"Card aliases: {alias_count:,}")
     print(f"SQLite: {db_bytes / 1024 / 1024:.2f} MB")
     print(f"Gzip: {gz_bytes / 1024 / 1024:.2f} MB")
 
