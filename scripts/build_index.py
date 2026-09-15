@@ -44,7 +44,7 @@ CARD_TYPE_JA = {
 
 SUBTYPE_JA = {
     "Hero": "英雄",
-    "Villain": "悪役",
+    "Villain": "悪人",
 }
 
 # Scryfall keywords は英語の正規語のみなので、よく使うものは確定辞書を持つ。
@@ -155,8 +155,15 @@ def english_oracle_text(card):
     return join_faces(card, "oracle_text", "\n//\n")
 
 
+def normalize_japanese_card_name(value):
+    """Remove only parenthesized hiragana readings from Japanese card names."""
+    if not value:
+        return value
+    return re.sub(r"（[ぁ-ゖゝゞー]+）", "", value)
+
+
 def japanese_name(card):
-    return join_faces(card, "printed_name", " // ")
+    return normalize_japanese_card_name(join_faces(card, "printed_name", " // "))
 
 
 def japanese_type(card):
