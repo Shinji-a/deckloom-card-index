@@ -1,0 +1,54 @@
+name: Measure 360px WebP card images
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "検証枚数"
+        required: true
+        default: "500"
+        type: string
+      width:
+        description: "出力幅(px)"
+        required: true
+        default: "360"
+        type: string
+      quality:
+        description: "WebP quality"
+        required: true
+        default: "80"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install Pillow
+        run: python -m pip install --disable-pip-version-check pillow
+      - name: Generate WebP sample
+        env:
+          COUNT: ${{ inputs.count }}
+          WIDTH: ${{ inputs.width }}
+          QUALITY: ${{ inputs.quality }}
+        run: python tools/measure_webp_pack.py --count "$COUNT" --width "$WIDTH" --quality "$QUALITY"
+      - name: Publish summary
+        if: always()
+        run: |
+          if [ -f dist/webp-lab/summary.md ]; then cat dist/webp-lab/summary.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Upload visual sample
+        uses: actions/upload-artifact@v4
+        with:
+          name: deckloom-webp-${{ inputs.width }}px-q${{ inputs.quality }}-${{ inputs.count }}
+          path: |
+            dist/webp-lab/images/
+            dist/webp-lab/summary.md
+            dist/webp-lab/report.json
+          retention-days: 14
