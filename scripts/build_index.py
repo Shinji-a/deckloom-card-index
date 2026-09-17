@@ -8,6 +8,7 @@ import sqlite3
 import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 
 API_URL = "https://api.scryfall.com/bulk-data"
 HEADERS = {
@@ -163,7 +164,7 @@ def normalize_japanese_card_name(value):
 
 
 def japanese_name(card):
-    return normalize_japanese_card_name(join_faces(card, "printed_name", " // "))
+    return normalize_japanese_card_name(japanese_field(card, "printed_name", " // "))
 
 
 def normalized_face_name(value):
@@ -192,11 +193,11 @@ def collect_card_aliases(card):
 
 
 def japanese_type(card):
-    return join_faces(card, "printed_type_line", " // ")
+    return japanese_field(card, "printed_type_line", " // ")
 
 
 def japanese_text(card):
-    return join_faces(card, "printed_text", "\n//\n")
+    return japanese_field(card, "printed_text", "\n//\n")
 
 
 def face_json(card, localized=False):
@@ -219,9 +220,9 @@ def face_json(card, localized=False):
         }
         if localized:
             item.update({
-                "printed_name": face.get("printed_name"),
-                "printed_type_line": face.get("printed_type_line"),
-                "printed_text": face.get("printed_text"),
+                "printed_name": usable_japanese_value(face, "printed_name"),
+                "printed_type_line": usable_japanese_value(face, "printed_type_line"),
+                "printed_text": usable_japanese_value(face, "printed_text"),
             })
         result.append(item)
 
@@ -313,6 +314,153 @@ def japanese_score(card):
     return 20 if "paper" in set(card.get("games") or []) else 10
 
 
+# Conservative language screening, not translation validation. Symbols/numbers are
+# language-neutral; Japanese can legitimately contain Latin names in a sentence.
+JAPANESE_CHAR = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uff66-\uff9f]")
+LATIN_WORD = re.compile(r"[A-Za-z]+(?:['’-][A-Za-z]+)*")
+MANA_SYMBOL = re.compile(r"\{[^{}]*\}")
+
+
+def japanese_language_issue(value, key, oracle_value=""):
+    text = MANA_SYMBOL.sub("", str(value or "")).strip()
+    if not LATIN_WORD.search(text):
+        return None
+    if not JAPANESE_CHAR.search(text):
+        return "english_only"
+    if key == "printed_text":
+        # Catch a whole untranslated paragraph/keyword among Japanese lines.
+        # Do not reject an isolated Latin proper name embedded in Japanese.
+        oracle_lines = {MANA_SYMBOL.sub("", line).strip().casefold()
+                        for line in str(oracle_value or "").splitlines() if line.strip()}
+        for line in text.splitlines():
+            line = line.strip()
+            # Level ranges are structural labels also found in otherwise
+            # Japanese leveler records, not an untranslated rules paragraph.
+            if re.fullmatch(r"(?:LEVEL|Lv)\s+\d+(?:[-–]\d+|\+)?", line, re.IGNORECASE):
+                continue
+            words = LATIN_WORD.findall(line)
+            if words and not JAPANESE_CHAR.search(line):
+                if len(words) >= 3 or line.casefold() in oracle_lines:
+                    return "english_paragraph"
+    return None
+
+
+def japanese_text_required(face):
+    oracle = face.get("oracle_text")
+    if oracle is not None and not str(oracle).strip():
+        return False
+    # Basic lands often omit their intrinsic mana reminder on the printed card.
+    # This exemption must not hide actual abilities on a basic land.
+    if "Basic" in (face.get("type_line") or "") and "Land" in (face.get("type_line") or ""):
+        if re.fullmatch(r"\{T\}: Add (?:\{[WUBRGC]\})+\.", str(oracle or "").strip()):
+            return False
+    return True
+
+
+def usable_japanese_value(face, key):
+    value = face.get(key)
+    if not str(value or "").strip():
+        return None
+    if japanese_language_issue(value, key, face.get("oracle_text")):
+        return None
+    return value
+
+
+def japanese_field(card, key, separator):
+    # Some layouts expose aggregate printed fields only at the card root.
+    value = usable_japanese_value(card, key)
+    if value is not None:
+        return str(value)
+    values = []
+    for face in card.get("card_faces") or []:
+        value = usable_japanese_value(face, key)
+        if value is not None:
+            values.append(str(value))
+    # Retain usable partial translations, as join_faces did. Missing/English
+    # faces remain explicit in the coverage report and per-face JSON; retaining
+    # one face must never mark the printing complete or replace the full Oracle.
+    return separator.join(values) if values else None
+
+
+def japanese_content_quality(card):
+    """Rank usable content, retaining one printing and its provenance.
+
+    Nonempty English printed fields are not a Japanese translation. Keep blank
+    fields and suspected untranslated fields separate in the audit. Never
+    manufacture Japanese or modify the canonical English Oracle.
+    """
+    missing, untranslated = [], []
+    present = 0
+    text_ok = True
+    for index, face in enumerate(card.get("card_faces") or [card]):
+        fields = ["printed_name", "printed_type_line"]
+        if japanese_text_required(face) or str(face.get("printed_text") or "").strip():
+            fields.append("printed_text")
+        for key in fields:
+            label = f"face[{index}].{key}" if card.get("card_faces") else key
+            value = face.get(key)
+            reason = japanese_language_issue(value, key, face.get("oracle_text"))
+            if not str(value or "").strip():
+                missing.append(label)
+            elif reason:
+                untranslated.append({"field": label, "reason": reason})
+            else:
+                present += 1
+                continue
+            if key == "printed_text":
+                text_ok = False
+    quality = (not missing and not untranslated, text_ok, present, -len(untranslated))
+    return quality, missing, untranslated
+
+
+def select_japanese_printing(card, state):
+    quality, missing, untranslated = japanese_content_quality(card)
+    printing_rank = (japanese_score(card), card.get("released_at") or "", card.get("id") or "")
+    rank = (*quality, *printing_rank)
+    if printing_rank > state.get("jp_latest_rank", (-1, "", "")):
+        state["jp_latest_rank"] = printing_rank
+        state["jp_latest_id"] = card.get("id")
+        state["jp_latest_missing"] = missing
+        state["jp_latest_untranslated"] = untranslated
+    if "jp_rank" in state and rank <= state["jp_rank"]:
+        return False
+    state["jp_rank"] = rank
+    state["jp_missing"] = missing
+    state["jp_untranslated"] = untranslated
+    return True
+
+
+def japanese_coverage(cur, card_states, token_states):
+    """Separate absent printings, unresolved gaps and recovery from other editions."""
+    report = {"cards": {}, "tokens": {}}
+    for table, states, key in (("cards", card_states, "oracle_id"), ("tokens", token_states, "token_key")):
+        section = {"without_japanese_printing": 0, "complete": 0,
+                   "incomplete": [], "recovered_from_incomplete_printing": []}
+        for entity_id, name, selected_id in cur.execute(
+            f"SELECT {key}, english_name, japanese_scryfall_id FROM {table} ORDER BY {key}"
+        ):
+            state = states[entity_id]
+            if "jp_rank" not in state:
+                section["without_japanese_printing"] += 1
+                continue
+            detail = {key: entity_id, "english_name": name, "selected_scryfall_id": selected_id,
+                      "preferred_japanese_scryfall_id": state["jp_latest_id"]}
+            missing, untranslated = state["jp_missing"], state["jp_untranslated"]
+            if missing or untranslated:
+                section["incomplete"].append({**detail, "missing": missing,
+                                               "untranslated": untranslated})
+            else:
+                section["complete"] += 1
+            if selected_id != state["jp_latest_id"] and (state["jp_latest_missing"] or state["jp_latest_untranslated"]):
+                section["recovered_from_incomplete_printing"].append(
+                    {**detail, "preferred_printing_missing": state["jp_latest_missing"],
+                     "preferred_printing_untranslated": state["jp_latest_untranslated"],
+                     "fully_resolved": not missing and not untranslated}
+                )
+        report[table] = section
+    return report
+
+
 def should_replace(new_score, new_date, old_score, old_date):
     if new_score > old_score:
         return True
@@ -380,7 +528,7 @@ def collect_subtype_votes(card, subtype_votes):
     for english_line, japanese_line in pairs:
         en_sub = split_after_dash(english_line)
         ja_sub = split_after_dash(japanese_line)
-        if not en_sub or not ja_sub:
+        if not en_sub or not ja_sub or japanese_language_issue(japanese_line, "printed_type_line"):
             continue
 
         english_parts = tokenize_english_subtypes(en_sub)
@@ -574,7 +722,7 @@ def process_token(cur, card, token_states, token_term_votes):
         jp_name = japanese_name(card)
         if jp_name:
             token_term_votes[card.get("name") or "Token"][jp_name] += 1
-        if should_replace(jp_score, release, st["jp_score"], st["jp_date"]):
+        if select_japanese_printing(card, st):
             update_dict(cur, "tokens", {
                 "japanese_name": jp_name,
                 "japanese_type_line": japanese_type(card),
@@ -589,12 +737,59 @@ def process_token(cur, card, token_states, token_term_votes):
             st["jp_date"] = release
 
 
+def load_japanese_overrides(path=None):
+    path = Path(path) if path else Path(__file__).resolve().parents[1] / "data/japanese-printing-overrides.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != 1:
+        raise ValueError("Unsupported Japanese override schema")
+    result = {}
+    for entry in payload["printings"]:
+        sid = entry["scryfall_id"]
+        if sid in result or entry["lang"] != "ja" or not entry["oracle_id"]:
+            raise ValueError(f"Invalid or duplicate Japanese override: {sid}")
+        if not entry["set"] or not entry["collector_number"] or not entry["reviewed_at"]:
+            raise ValueError(f"Missing override provenance: {sid}")
+        source = entry["source"]
+        if (source["kind"] != "printed_card_image" or not source["url"].startswith("https://")
+                or not re.fullmatch(r"[0-9a-f]{64}", source["sha256"])):
+            raise ValueError(f"Invalid image provenance: {sid}")
+        fields = entry["fields"]
+        if not fields or set(fields) - {"printed_name", "printed_type_line", "printed_text"}:
+            raise ValueError(f"Invalid override fields: {sid}")
+        if any(not str(value).strip() or not JAPANESE_CHAR.search(str(value))
+               or japanese_language_issue(value, key) for key, value in fields.items()):
+            raise ValueError(f"Override is not reviewed Japanese text: {sid}")
+        result[sid] = entry
+    return result
+
+
+def apply_japanese_override(card, overrides):
+    entry = overrides.get(card.get("id"))
+    if not entry:
+        return None
+    for key in ("oracle_id", "lang", "set", "collector_number"):
+        if card.get(key) != entry[key]:
+            raise ValueError(f"Japanese override identity mismatch: {card.get('id')} {key}")
+    if card.get("card_faces"):
+        raise ValueError("Multi-face overrides require explicit face provenance support")
+    applied = []
+    for key, value in entry["fields"].items():
+        if usable_japanese_value(card, key) is None:
+            card[key] = value
+            applied.append(key)
+    return {"scryfall_id": card["id"], "oracle_id": card["oracle_id"],
+            "applied_fields": applied, "source": entry["source"],
+            "reviewed_at": entry["reviewed_at"]}
+
+
 def create_database(download_uri, bulk_updated_at):
+    overrides = load_japanese_overrides()
+    override_audit = []
     os.makedirs("dist", exist_ok=True)
     db_path = "dist/deckloom-card-index.sqlite"
     gz_path = db_path + ".gz"
 
-    for path in (db_path, gz_path, "dist/manifest.json"):
+    for path in (db_path, gz_path, "dist/manifest.json", "dist/japanese-coverage.json"):
         if os.path.exists(path):
             os.remove(path)
 
@@ -785,6 +980,9 @@ def create_database(download_uri, bulk_updated_at):
                         continue
                     total_printings += 1
                     card = json.loads(line)
+                    override = apply_japanese_override(card, overrides)
+                    if override is not None:
+                        override_audit.append(override)
 
                     for keyword in card.get("keywords") or []:
                         keywords_seen.add(keyword)
@@ -891,7 +1089,7 @@ def create_database(download_uri, bulk_updated_at):
 
                     if card.get("lang") == "ja":
                         japanese_printings += 1
-                        if should_replace(jp_score, release, st["jp_score"], st["jp_date"]):
+                        if select_japanese_printing(card, st):
                             update_dict(cur, "cards", {
                                 "japanese_name": japanese_name(card),
                                 "japanese_type_line": japanese_type(card),
@@ -1003,6 +1201,13 @@ def create_database(download_uri, bulk_updated_at):
     display_terms_count = cur.execute("SELECT COUNT(*) FROM display_terms").fetchone()[0]
     alias_count = cur.execute("SELECT COUNT(*) FROM card_aliases").fetchone()[0]
     token_count = cur.execute("SELECT COUNT(*) FROM tokens").fetchone()[0]
+    coverage = japanese_coverage(cur, card_state, token_states)
+    coverage["reviewed_overrides"] = {
+        "observed": override_audit,
+        "not_observed": sorted(set(overrides) - {item["scryfall_id"] for item in override_audit}),
+    }
+    with open("dist/japanese-coverage.json", "w", encoding="utf-8") as f:
+        json.dump(coverage, f, ensure_ascii=False, indent=2)
     conn.close()
 
     with open(db_path, "rb") as src:
@@ -1026,6 +1231,14 @@ def create_database(download_uri, bulk_updated_at):
         "display_terms": display_terms_count,
         "card_aliases": alias_count,
         "total_printings_processed": total_printings,
+        "japanese_coverage_report": "japanese-coverage.json",
+        "japanese_coverage": {
+            table: {name: len(value) if isinstance(value, list) else value
+                    for name, value in section.items()}
+            for table, section in coverage.items()
+            if table in ("cards", "tokens")
+        },
+        "reviewed_japanese_overrides_applied": sum(bool(item["applied_fields"]) for item in override_audit),
         "database": os.path.basename(db_path),
         "database_bytes": db_bytes,
         "database_sha256": sha256_file(db_path),
