@@ -313,6 +313,73 @@ def japanese_score(card):
     return 20 if "paper" in set(card.get("games") or []) else 10
 
 
+def japanese_content_quality(card):
+    """Check actual printed fields, including each DFC face and textless faces.
+
+    Keep one coherent printing as the localization source. Images continue to
+    use the independent preferred-printing selection. An older printed text is
+    not a translation of current Oracle; never manufacture missing translations.
+    """
+    faces = card.get("card_faces") or [card]
+    missing = []
+    present = 0
+    for index, face in enumerate(faces):
+        fields = ["printed_name", "printed_type_line"]
+        # Explicit empty Oracle text is legitimate (e.g. vanilla creatures).
+        # An absent Oracle field is unknown, not proof that no text is needed.
+        if face.get("oracle_text") is None or str(face.get("oracle_text")).strip():
+            fields.append("printed_text")
+        for field in fields:
+            if str(face.get(field) or "").strip():
+                present += 1
+            else:
+                missing.append(f"face[{index}].{field}" if card.get("card_faces") else field)
+    return (not missing, present), missing
+
+
+def select_japanese_printing(card, state):
+    """Select complete localized content before paper preference / recency."""
+    quality, missing = japanese_content_quality(card)
+    printing_rank = (japanese_score(card), card.get("released_at") or "", card.get("id") or "")
+    rank = (*quality, *printing_rank)
+    if printing_rank > state.get("jp_latest_rank", (-1, "", "")):
+        state["jp_latest_rank"] = printing_rank
+        state["jp_latest_id"] = card.get("id")
+        state["jp_latest_missing"] = missing
+    if rank <= state.get("jp_rank", (False, -1, -1, "", "")):
+        return False
+    state["jp_rank"] = rank
+    state["jp_missing"] = missing
+    return True
+
+
+def japanese_coverage(cur, card_states, token_states):
+    """Separate absent Japanese printings from incomplete or recovered data."""
+    report = {"cards": {}, "tokens": {}}
+    for table, states, key in (("cards", card_states, "oracle_id"), ("tokens", token_states, "token_key")):
+        section = {"without_japanese_printing": 0, "complete": 0,
+                   "incomplete": [], "recovered_from_incomplete_printing": []}
+        for entity_id, name, selected_id in cur.execute(
+            f"SELECT {key}, english_name, japanese_scryfall_id FROM {table} ORDER BY {key}"
+        ):
+            state = states[entity_id]
+            if "jp_rank" not in state:
+                section["without_japanese_printing"] += 1
+                continue
+            detail = {key: entity_id, "english_name": name, "selected_scryfall_id": selected_id,
+                      "preferred_japanese_scryfall_id": state["jp_latest_id"]}
+            if state["jp_missing"]:
+                section["incomplete"].append({**detail, "missing": state["jp_missing"]})
+            else:
+                section["complete"] += 1
+            if selected_id != state["jp_latest_id"] and state["jp_latest_missing"]:
+                section["recovered_from_incomplete_printing"].append(
+                    {**detail, "preferred_printing_missing": state["jp_latest_missing"]}
+                )
+        report[table] = section
+    return report
+
+
 def should_replace(new_score, new_date, old_score, old_date):
     if new_score > old_score:
         return True
@@ -574,7 +641,7 @@ def process_token(cur, card, token_states, token_term_votes):
         jp_name = japanese_name(card)
         if jp_name:
             token_term_votes[card.get("name") or "Token"][jp_name] += 1
-        if should_replace(jp_score, release, st["jp_score"], st["jp_date"]):
+        if select_japanese_printing(card, st):
             update_dict(cur, "tokens", {
                 "japanese_name": jp_name,
                 "japanese_type_line": japanese_type(card),
@@ -594,7 +661,7 @@ def create_database(download_uri, bulk_updated_at):
     db_path = "dist/deckloom-card-index.sqlite"
     gz_path = db_path + ".gz"
 
-    for path in (db_path, gz_path, "dist/manifest.json"):
+    for path in (db_path, gz_path, "dist/manifest.json", "dist/japanese-coverage.json"):
         if os.path.exists(path):
             os.remove(path)
 
@@ -891,7 +958,7 @@ def create_database(download_uri, bulk_updated_at):
 
                     if card.get("lang") == "ja":
                         japanese_printings += 1
-                        if should_replace(jp_score, release, st["jp_score"], st["jp_date"]):
+                        if select_japanese_printing(card, st):
                             update_dict(cur, "cards", {
                                 "japanese_name": japanese_name(card),
                                 "japanese_type_line": japanese_type(card),
@@ -1003,6 +1070,9 @@ def create_database(download_uri, bulk_updated_at):
     display_terms_count = cur.execute("SELECT COUNT(*) FROM display_terms").fetchone()[0]
     alias_count = cur.execute("SELECT COUNT(*) FROM card_aliases").fetchone()[0]
     token_count = cur.execute("SELECT COUNT(*) FROM tokens").fetchone()[0]
+    coverage = japanese_coverage(cur, card_state, token_states)
+    with open("dist/japanese-coverage.json", "w", encoding="utf-8") as f:
+        json.dump(coverage, f, ensure_ascii=False, indent=2)
     conn.close()
 
     with open(db_path, "rb") as src:
@@ -1026,6 +1096,12 @@ def create_database(download_uri, bulk_updated_at):
         "display_terms": display_terms_count,
         "card_aliases": alias_count,
         "total_printings_processed": total_printings,
+        "japanese_coverage_report": "japanese-coverage.json",
+        "japanese_coverage": {
+            table: {name: len(value) if isinstance(value, list) else value
+                    for name, value in section.items()}
+            for table, section in coverage.items()
+        },
         "database": os.path.basename(db_path),
         "database_bytes": db_bytes,
         "database_sha256": sha256_file(db_path),
