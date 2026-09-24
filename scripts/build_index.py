@@ -372,12 +372,12 @@ def japanese_language_issue(value, key, oracle_value=""):
 
 def japanese_text_required(face):
     oracle = face.get("oracle_text")
-    if oracle is not None and not str(oracle).strip():
+    if not str(oracle or '').strip():
         return False
     # Basic lands often omit their intrinsic mana reminder on the printed card.
     # This exemption must not hide actual abilities on a basic land.
     if "Basic" in (face.get("type_line") or "") and "Land" in (face.get("type_line") or ""):
-        if re.fullmatch(r"\{T\}: Add (?:\{[WUBRGC]\})+\.", str(oracle or "").strip()):
+        if re.fullmatch(r"\(?\{T\}: Add (?:\{[WUBRGC]\})+\.\)?", str(oracle or "").strip()):
             return False
     return True
 
@@ -1230,6 +1230,18 @@ def create_database(download_uri, bulk_updated_at, enrichment_options=None):
         "database_gzip_sha256": sha256_file(gz_path),
     }
     with open("dist/manifest.json", "w", encoding="utf-8") as f:
+        if __package__:
+            from . import previous_database, whisper_enrichment
+        else:
+            import previous_database, whisper_enrichment
+        manifest.update(previous_database.package())
+        manifest['attribution'] = whisper_enrichment.ATTRIBUTION
+        manifest['source_attribution_file'] = 'SOURCES.txt'
+        Path('dist/SOURCES.txt').write_text(
+            'Scryfall: https://scryfall.com/\nMTGJSON: https://mtgjson.com/\n' +
+            whisper_enrichment.ATTRIBUTION + '\nhttps://whisper.wisdom-guild.net/\n' +
+            whisper_enrichment.POLICY + '\nPer-field source URLs: japanese-enrichment.json and '
+            'SQLite japanese_field_sources.\nPrevious verified release fields may be retained.\n', encoding='utf-8')
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
     print("\nDone!")

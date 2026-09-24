@@ -19,7 +19,7 @@ def generate(cards, atomic=None, client=None, gallery=False):
     with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
         with patch.object(b, 'request', return_value=io.BytesIO(raw)), contextlib.redirect_stdout(io.StringIO()):
             b.create_database('fixture', '2026-09-24', {'atomic_payload': atomic or {'meta': {'date': '2026-09-24'}, 'data': {}},
-                                                      'gallery': gallery, 'client': client})
+                                                      'gallery': gallery, 'client': client, 'whisper': False})
         conn = sqlite3.connect('dist/deckloom-card-index.sqlite'); conn.row_factory = sqlite3.Row
         rows = [dict(r) for r in conn.execute('SELECT * FROM cards')]; conn.close()
         return rows, json.loads(Path('dist/japanese-enrichment.json').read_text())

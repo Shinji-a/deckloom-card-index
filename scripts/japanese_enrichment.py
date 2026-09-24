@@ -220,6 +220,7 @@ def row_faces(row):
     canonical = json.loads(row.get('faces_json') or '[]')
     if not canonical:
         return [{'name': row['english_name'], 'type_line': row['english_type_line'],
+                 **{k: row.get(k) for k in ('mana_cost', 'power', 'toughness')},
                  'oracle_text': row['english_oracle_text'], **{key: row[col] for key, col in COLUMNS.items()}}]
     localized = json.loads(row.get('japanese_faces_json') or '[]')
     by_name = {f['name']: f for f in localized}
@@ -428,7 +429,12 @@ def apply_gallery(rows, state, collector, client, helpers, report):
     report['gallery_budget_exhausted'] = bool(deferred)
 
 
-def enrich(cur, helpers, collector, client=None, atomic_payload=None, gallery=True):
+def enrich(cur, helpers, collector, client=None, atomic_payload=None, gallery=False,
+           whisper=True, whisper_client=None, previous_directory=None):
+    if __package__:
+        from . import whisper_enrichment as w, previous_database
+    else:
+        import whisper_enrichment as w, previous_database
     client = client or SourceClient()
     payload, atomic_source = load_atomic(client) if atomic_payload is None else (atomic_payload, {'kind': 'test_fixture'})
     columns = [x[0] for x in cur.execute('SELECT * FROM cards LIMIT 0').description]
@@ -445,11 +451,21 @@ def enrich(cur, helpers, collector, client=None, atomic_payload=None, gallery=Tr
         state[oid] = (faces, detail)
     if gallery:
         apply_gallery(rows, state, collector, client, helpers, report)
+    if whisper:
+        import sys
+        w.apply(cur, rows, state, helpers, sys.modules[__name__], report, whisper_client)
+    import sys
+    previous_database.retain(rows, state, helpers, sys.modules[__name__], report, previous_directory)
+    cur.execute('CREATE TABLE IF NOT EXISTS japanese_field_sources '
+                '(oracle_id TEXT, face TEXT, field TEXT, source_json TEXT, PRIMARY KEY(oracle_id,face,field))')
     for oid, row in rows.items():
         faces, detail = state[oid]
         if detail['applied']:
             save_row(cur, row, faces, helpers)
             report['applied'].append(detail)
+            for item in detail['applied']:
+                cur.execute('INSERT OR REPLACE INTO japanese_field_sources VALUES (?,?,?,?)',
+                            (oid, item['face'], item['field'], json.dumps(item['source'], ensure_ascii=False)))
         if detail['conflicts']:
             report['conflicts'].append({k: v for k, v in detail.items() if k != 'applied'})
         missing = issues(faces, helpers)
