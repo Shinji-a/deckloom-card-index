@@ -32,6 +32,14 @@ fields are retained from the previous release with their original attribution.
   restored on the next run. It does not depend on the Actions cache retention period.
 - The app queries its own database, never WHISPER on each user search.
 
+Requests prefer HTML but also allow a low-priority `*/*` media type. The public
+Apache route negotiates an `application/x-httpd-php` handler before returning
+HTML; an HTML-only `Accept` incorrectly caused HTTP 406. This is content
+negotiation, not an access-control bypass. The identifying DeckLoom User-Agent,
+request limits and response-body validation are unchanged. HTTP failures record
+status, content type, advertised alternatives and a bounded response excerpt so
+configuration problems are distinguishable from source restrictions.
+
 The set index and exact normalized set names discover URLs; no guessed numeric
 URLs or individually crawled card pages are used. Set selection prefers cached
 pages and then larger coverage of still-missing cards, with stable tie breaking.

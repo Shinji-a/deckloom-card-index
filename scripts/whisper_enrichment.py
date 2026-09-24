@@ -8,6 +8,7 @@ import time
 import unicodedata
 import urllib.parse
 import urllib.request
+import urllib.error
 from collections import defaultdict
 from pathlib import Path
 
@@ -83,7 +84,10 @@ class Client:
                         self.sleep(max(0, MIN_INTERVAL - (self.clock() - self.last_finished)))
                     req = urllib.request.Request(url, headers={
                         'User-Agent': 'DeckLoom-CardIndex/0.49 (+https://github.com/Shinji-a/deckloom-card-index)',
-                        'Accept': 'text/html'})
+                        # Apache negotiates this public route as application/x-httpd-php
+                        # before PHP returns HTML. HTML-only Accept causes a 406.
+                        # Prefer HTML, allow the handler variant, then validate the body.
+                        'Accept': 'text/html, */*;q=0.1'})
                     self.requests += 1
                     try:
                         with self.open(req, timeout=45) as response:
@@ -101,7 +105,19 @@ class Client:
                     self.used[url] = {**info, 'cache': False, 'stale': False}
                     return parsed
                 except (OSError, ValueError) as exc:
-                    self.errors.append({'url': url, 'reason': str(exc)[:250]})
+                    error = {'url': url, 'reason': str(exc)[:250]}
+                    if isinstance(exc, urllib.error.HTTPError):
+                        error.update(status=exc.code,
+                                     content_type=exc.headers.get('Content-Type', ''),
+                                     alternatives=exc.headers.get('Alternates', '')[:1000])
+                        try:
+                            error['body_excerpt'] = exc.read(2048).decode('utf-8', 'replace')
+                        except OSError:
+                            pass
+                        finally:
+                            exc.close()
+                    self.errors.append(error)
+                    print('WHISPER stopped:', json.dumps(error, ensure_ascii=False), flush=True)
                     # No automatic retries; stop all further network calls this run on failure.
                     self.halted = True
             if cached:
