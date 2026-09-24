@@ -37,7 +37,7 @@ def build(cards):
     with tempfile.TemporaryDirectory() as directory:
         with contextlib.chdir(directory), patch.object(builder, "request", return_value=io.BytesIO(payload)):
             with contextlib.redirect_stdout(io.StringIO()):
-                builder.create_database("offline-fixture", "2026-09-17T00:00:00Z", {"atomic_payload": {"meta": {"date": "2026-09-24"}, "data": {}}, "gallery": False})
+                builder.create_database("offline-fixture", "2026-09-17T00:00:00Z", {"atomic_payload": {"meta": {"date": "2026-09-24"}, "data": {}}, "gallery": False, "whisper": False})
             with sqlite3.connect("dist/deckloom-card-index.sqlite") as db:
                 db.row_factory = sqlite3.Row
                 result = {t: [dict(r) for r in db.execute(f"SELECT * FROM {t}")]

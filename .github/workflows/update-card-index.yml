@@ -56,7 +56,23 @@ jobs:
       - name: Test Japanese printing selection
         run: python -m unittest discover -s tests -v
 
+      - name: Restore verified previous release and durable WHISPER cache
+        run: |
+          mkdir -p previous
+          gh release download card-index-latest --dir previous \
+            --pattern manifest.json --pattern deckloom-card-index.sqlite.gz --pattern japanese-enrichment.json
+          if gh release view card-index-latest --json assets --jq '.assets[].name' | grep -qx 'whisper-cache.tar.gz'; then
+            gh release download card-index-latest --dir previous --pattern whisper-cache.tar.gz
+          fi
+          python scripts/previous_database.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Build Japanese card index
+        env:
+          DECKLOOM_PREVIOUS_DIR: previous
+          # PRs test integration with existing cache; only serialized main runs access WHISPER.
+          DECKLOOM_WHISPER_OFFLINE: ${{ github.ref == 'refs/heads/main' && '0' || '1' }}
         run: |
           python scripts/build_index.py
 
@@ -73,6 +89,8 @@ jobs:
             dist/japanese-coverage.json
             dist/manifest.json
             dist/deckloom-card-index.sqlite.gz
+            dist/whisper-cache.tar.gz
+            dist/SOURCES.txt
           if-no-files-found: ignore
 
       - name: Show generated files
@@ -97,6 +115,8 @@ jobs:
             dist/deckloom-card-index.sqlite.gz \
             dist/japanese-coverage.json \
             dist/japanese-enrichment.json \
+            dist/whisper-cache.tar.gz \
+            dist/SOURCES.txt \
             --clobber
           gh release upload card-index-latest dist/manifest.json --clobber
         env:

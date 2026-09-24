@@ -1,4 +1,6 @@
 dist/
 .source-cache/
+.whisper-cache/
+previous/
 __pycache__/
 *.pyc
