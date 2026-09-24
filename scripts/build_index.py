@@ -183,10 +183,12 @@ def japanese_name(card):
 
 def japanese_face_names(faces):
     names = [usable_japanese_value(face, "printed_name") for face in faces]
-    # Older split-card records may store both names on the first face.
-    combined = (names[0] or "").split(" // ") if names else []
-    if len(combined) == len(faces) and len(faces) > 1 and not any(names[1:]):
-        return combined
+    # Some split printings store the aggregate on one or both faces.
+    for aggregate in names:
+        combined = (aggregate or "").split(" // ")
+        if len(combined) == len(faces) and len(faces) > 1 and all(
+                value in (None, aggregate, part) for value, part in zip(names, combined)):
+            return combined
     return names
 
 

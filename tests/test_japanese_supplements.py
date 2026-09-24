@@ -23,6 +23,9 @@ class SupplementTests(unittest.TestCase):
         card={'card_faces':[{'name':'Pain','printed_name':'苦痛 // 受難'},{'name':'Suffering'}]}
         self.assertEqual(builder.japanese_name(card),'苦痛 // 受難')
         self.assertEqual(json.loads(builder.face_json(card,True))[1]['printed_name'],'受難')
+        card['card_faces'][1]['printed_name']='苦痛 // 受難'
+        self.assertEqual(builder.japanese_name(card),'苦痛 // 受難')
+        self.assertEqual(json.loads(builder.face_json(card,True))[0]['printed_name'],'苦痛')
 
     def test_missing_printing_is_supplemented_without_fake_printing_id(self):
         item=self.fixture('Argoth,')
