@@ -1,0 +1,117 @@
+name: Verify Published Japanese Index
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/verify-published-index.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -r requirements.txt
+      - name: Download and verify the currently published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p review
+          gh release download card-index-latest --dir review \
+            --pattern manifest.json --pattern deckloom-card-index.sqlite.gz \
+            --pattern japanese-enrichment.json --pattern whisper-cache.tar.gz --pattern SOURCES.txt
+          python -c "from scripts.previous_database import prepare; prepare('review')"
+      - name: Inspect real SQLite fields and restored cache without source requests
+        run: |
+          python - <<'PY'
+          import collections, hashlib, json, sqlite3, time
+          from pathlib import Path
+          from scripts import build_index as b, japanese_enrichment as e, whisper_enrichment as w
+
+          root = Path('review')
+          manifest = json.loads((root / 'manifest.json').read_text())
+          audit = json.loads((root / 'japanese-enrichment.json').read_text())
+          assert audit['summary'] == manifest['automatic_japanese_enrichment']
+          db = sqlite3.connect('file:review/index.sqlite?mode=ro', uri=True)
+          db.row_factory = sqlite3.Row
+          assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+          rows = [dict(r) for r in db.execute('SELECT * FROM cards')]
+          assert len(rows) == manifest['unique_cards']
+          counts = collections.Counter()
+          remaining = []
+          for row in rows:
+              if row['layout'] == 'art_series':
+                  continue
+              faces = e.row_faces(row)
+              needed = any(b.japanese_text_required(f) for f in faces)
+              name = bool((row['japanese_name'] or '').strip())
+              body = bool((row['japanese_text'] or '').strip())
+              if name and needed and not body:
+                  counts['name_present_body_missing'] += 1
+              if not name and body:
+                  counts['body_present_name_missing'] += 1
+              if not name and needed and not body:
+                  counts['both_missing_deferred'] += 1
+              if w.target(row, faces, b, e):
+                  counts['whisper_eligible_after_retention'] += 1
+                  remaining.append({'oracle_id': row['oracle_id'], 'name': row['english_name'],
+                                    'issues': e.issues(faces, b)})
+
+          # Inspection examples only; these names never affect production data.
+          names = {'Glacier Godmaw', 'Uthros Scanship',
+                   'Zanarkand, Ancient Metropolis // Lasting Fayth'}
+          checks = [{k: row[k] for k in ('oracle_id', 'english_name', 'japanese_name',
+                    'japanese_text', 'japanese_faces_json')} for row in rows if row['english_name'] in names]
+          assert len(checks) == len(names)
+          for row in checks:
+              assert row['japanese_name'] and row['japanese_text'], row['english_name']
+          godmaw = next(row for row in checks if row['english_name'] == 'Glacier Godmaw')
+          assert '上陸' in godmaw['japanese_text']
+
+          def forbidden_network(*args, **kwargs):
+              raise AssertionError('Restored fresh cache unexpectedly requested network')
+          client = w.Client(opener=forbidden_network)
+          fresh, expired = 0, 0
+          for meta_path in sorted(Path('.whisper-cache').glob('*.json')):
+              meta = json.loads(meta_path.read_text())
+              url = meta['url']
+              ttl = w.INDEX_TTL if url == w.INDEX else w.PAGE_TTL
+              if time.time() - meta['fetched_at'] >= ttl:
+                  expired += 1
+                  continue
+              assert client.get(url, w.parse_index if url == w.INDEX else w.parse_set, ttl)
+              fresh += 1
+          assert client.requests == 0
+
+          wisdom = [c for c in audit['applied'] if any(f['source']['kind'] == 'wisdom_guild' for f in c['applied'])]
+          result = {'generated_at': manifest['generated_at'], 'database_sha256': manifest['database_sha256'],
+                    'unique_cards': len(rows), 'counts': dict(counts), 'checks': checks,
+                    'whisper_cards': len(wisdom), 'whisper_fields': audit['summary']['fields_by_source'].get('wisdom_guild', 0),
+                    'requests': audit['whisper']['requests'], 'sets_checked': len(audit['whisper']['sets_checked']),
+                    'errors': audit['whisper']['errors'], 'fresh_cache_pages_reused': fresh,
+                    'expired_cache_pages_skipped': expired, 'cache_verification_requests': client.requests,
+                    'remaining': remaining}
+          (root / 'inspection.json').write_text(json.dumps(result, ensure_ascii=False, indent=2))
+          print(json.dumps({k: v for k, v in result.items() if k not in ('remaining', 'checks')}, ensure_ascii=False))
+          for row in checks:
+              print(json.dumps({'english_name': row['english_name'], 'japanese_name': row['japanese_name'],
+                                'japanese_text_chars': len(row['japanese_text'])}, ensure_ascii=False))
+          db.close()
+          PY
+      - name: Preserve compact inspection and cached sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-japanese-inspection
+          path: |
+            review/inspection.json
+            review/manifest.json
+            review/japanese-enrichment.json
+            review/whisper-cache.tar.gz
+            review/SOURCES.txt
