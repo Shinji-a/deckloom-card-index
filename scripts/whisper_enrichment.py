@@ -166,32 +166,44 @@ def parse_set(raw):
         if card.select_one('div.card'):
             continue
         headings = card.select('b a[href]')
-        if len(headings) != 1:
+        if not headings or any(a.parent.name != 'b' or a.parent.parent is not card for a in headings):
             continue
-        a = headings[0]
-        match = re.search(r'/card/([A-Za-z0-9]+)/', a['href'])
-        if not match:
+        footer = card.find_all('div', recursive=False)
+        if not any(x.get_text(' ', strip=True).startswith('Illus.') for x in footer):
             continue
-        direct = card.find_all(['p', 'div'], recursive=False)
-        paragraphs = [symbols(x.get_text('', strip=False).strip()) for x in direct if x.name == 'p']
-        divs = [x.get_text(' ', strip=True) for x in direct if x.name == 'div']
-        if not divs or not any(x.startswith('Illus.') for x in divs):
-            continue  # Incomplete block cannot prove a complete rules field.
-        type_match = re.fullmatch(r'(.*?)\s+([A-Z0-9]+),\s*(.+)', divs[0])
-        if not type_match:
-            continue
-        cost_parts = []
-        for node in a.parent.next_siblings:
-            if getattr(node, 'name', None):
-                break
-            cost_parts.append(str(node))
-        cost_raw = re.sub(r'^\s*（[ぁ-ゖゝゞー]+）', '', ''.join(cost_parts))
-        cost = symbols(cost_raw).strip()
-        if cost and not re.fullmatch(r'(?:\{[^{}]+\})+', cost):
-            continue
-        records.append({'heading': a.get_text('', strip=True), 'set': type_match[2].lower(),
-                        'type': type_match[1], 'text': '\n'.join(p for p in paragraphs if p),
-                        'mana_cost': cost, 'stats': divs[1:], 'card_url': a['href'].replace('http:', 'https:')})
+        # Adventure/split/transform faces can share a card container and footer.
+        # Bound each face at the next direct heading; never mix rules or P/T.
+        for a in headings:
+            match = re.search(r'/card/([A-Za-z0-9]+)/', a['href'])
+            if not match:
+                continue
+            direct = []
+            cost_parts = []
+            before_type = True
+            for node in a.parent.next_siblings:
+                name = getattr(node, 'name', None)
+                if name == 'b' and node.select_one('a[href]'):
+                    break
+                if name:
+                    before_type = False
+                    if name in ('p', 'div'):
+                        direct.append(node)
+                elif before_type:
+                    cost_parts.append(str(node))
+            paragraphs = [symbols(x.get_text('', strip=False).strip()) for x in direct if x.name == 'p']
+            divs = [x.get_text(' ', strip=True) for x in direct if x.name == 'div']
+            if not divs:
+                continue
+            type_match = re.fullmatch(r'(.*?)\s+([A-Z0-9]+),\s*(.+)', divs[0])
+            if not type_match:
+                continue
+            cost_raw = re.sub(r'^\s*（[ぁ-ゖゝゞー]+）', '', ''.join(cost_parts))
+            cost = symbols(cost_raw).strip()
+            if cost and not re.fullmatch(r'(?:\{[^{}]+\})+', cost):
+                continue
+            records.append({'heading': a.get_text('', strip=True), 'set': type_match[2].lower(),
+                            'type': type_match[1], 'text': '\n'.join(p for p in paragraphs if p),
+                            'mana_cost': cost, 'stats': divs[1:], 'card_url': a['href'].replace('http:', 'https:')})
     if not records:
         raise ValueError('WHISPER card list contains no validated blocks')
     return records

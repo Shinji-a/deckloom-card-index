@@ -59,6 +59,9 @@ matching mana cost, and matching power/toughness when present. Names are never
 matched fuzzily. Card blocks must include the expected heading/type/illustrator
 structure. Only rules paragraphs are extracted; names, type and statistics do not
 leak into rules. Known mana/tap symbols are converted to `{G}` / `{T}` notation.
+When several direct face headings share a container, each heading starts a new
+face segment. Costs, rules and P/T stop at the next heading; the shared illustrator
+footer establishes that the enclosing card block was received completely.
 Unsupported/ambiguous structures stay unresolved. Conflicting translations from
 variants in one list are reported, not chosen arbitrarily.
 
