@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,6 +25,40 @@ FACE = {'name': 'Test Beast', 'mana_cost': '{2}{G}', 'power': '3', 'toughness': 
 
 
 class WhisperTests(unittest.TestCase):
+    def test_negotiated_php_handler_can_return_validated_html(self):
+        # The live server advertises application/x-httpd-php before executing it.
+        # Reproduce that negotiation instead of returning HTML for every request.
+        def negotiated(req, **kwargs):
+            accepted = dict((part.strip().split(';')[0], part.strip())
+                            for part in req.get_header('Accept', '').split(','))
+            if not ({'application/x-httpd-php', 'application/*', '*/*'} & accepted.keys()):
+                raise urllib.error.HTTPError(req.full_url, 406, 'Not Acceptable',
+                    {'Alternates': '{"cardlist.php" 1 {type application/x-httpd-php}}'},
+                    io.BytesIO(b'Available variants: cardlist.php'))
+            self.assertIn('DeckLoom-CardIndex/', req.get_header('User-agent'))
+            return io.BytesIO(HTML)
+        with tempfile.TemporaryDirectory() as tmp:
+            c = w.Client(tmp, opener=negotiated)
+            records = c.get(w.ORIGIN+'/cardlist/Test/', w.parse_set)
+            self.assertTrue(records)
+            self.assertEqual(records[0]['heading'], '試験獣/Test Beast')
+            self.assertEqual(c.requests, 1)
+            self.assertEqual(c.errors, [])
+
+    def test_http_error_preserves_diagnostic_details_and_stops_requests(self):
+        def failed(req, **kwargs):
+            raise urllib.error.HTTPError(req.full_url, 406, 'Not Acceptable',
+                {'Content-Type': 'text/html', 'Alternates': 'application/x-httpd-php'},
+                io.BytesIO(b'Available variants: cardset.php'))
+        with tempfile.TemporaryDirectory() as tmp:
+            c = w.Client(tmp, opener=failed)
+            self.assertIsNone(c.get(w.INDEX, w.parse_index))
+            self.assertIsNone(c.get(w.ORIGIN+'/cardlist/Test/', w.parse_set))
+            self.assertEqual(c.requests, 1)
+            self.assertEqual(c.errors[0]['status'], 406)
+            self.assertIn('cardset.php', c.errors[0]['body_excerpt'])
+            self.assertEqual(c.errors[0]['alternatives'], 'application/x-httpd-php')
+
     def test_parse_reading_symbols_and_complete_body(self):
         record = w.parse_set(HTML)[0]
         self.assertEqual(record['mana_cost'], '{2}{G}')
@@ -35,6 +70,30 @@ class WhisperTests(unittest.TestCase):
         for raw in [b'<h1>Verify you are human</h1>', HTML.replace(b'<div>Illus.Test (1/1)</div>', b'')]:
             with self.assertRaises(ValueError):
                 w.parse_set(raw)
+
+    def test_shared_container_faces_keep_separate_rules_costs_and_stats(self):
+        adventure = '''<b><a href="/card/TST001/">試験の出来事/Test Adventure</a></b> (青)
+<div>インスタント ― 出来事(Adventure)　TST, コモン</div>
+<p>占術１を行う。</p>'''.encode()
+        multi = HTML.replace(b'<div>Illus.Test', adventure+b'<div>Illus.Test')
+        records = w.parse_set(multi)
+        self.assertEqual(len(records), 2)
+        beast, spell = records
+        self.assertEqual(beast['mana_cost'], '{2}{G}')
+        self.assertIn('3/3', beast['stats'])
+        self.assertNotIn('占術', beast['text'])
+        self.assertEqual(spell['mana_cost'], '{U}')
+        self.assertNotIn('3/3', spell['stats'])
+        self.assertEqual(spell['text'], '占術１を行う。')
+        faces = [dict(FACE), {'name':'Test Adventure','mana_cost':'{U}',
+                 'type_line':'Instant — Adventure','oracle_text':'Scry 1.'}]
+        audit = {'applied':[], 'conflicts':[]}
+        e.apply_candidates(faces, w.candidates(records, {}, faces, {'tst'}, {}, b), b, audit)
+        self.assertEqual(faces[1]['printed_name'], '試験の出来事')
+        self.assertEqual(faces[1]['printed_text'], '占術１を行う。')
+        self.assertEqual(faces[0]['printed_text'], beast['text'])
+        with self.assertRaises(ValueError):
+            w.parse_set(multi.replace(b'<div>Illus.Test (1/1)</div>', b''))
 
     def test_identity_cost_pt_and_set_must_match(self):
         records = w.parse_set(HTML)

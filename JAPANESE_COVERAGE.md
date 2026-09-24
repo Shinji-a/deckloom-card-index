@@ -32,6 +32,14 @@ fields are retained from the previous release with their original attribution.
   restored on the next run. It does not depend on the Actions cache retention period.
 - The app queries its own database, never WHISPER on each user search.
 
+Requests prefer HTML but also allow a low-priority `*/*` media type. The public
+Apache route negotiates an `application/x-httpd-php` handler before returning
+HTML; an HTML-only `Accept` incorrectly caused HTTP 406. This is content
+negotiation, not an access-control bypass. The identifying DeckLoom User-Agent,
+request limits and response-body validation are unchanged. HTTP failures record
+status, content type, advertised alternatives and a bounded response excerpt so
+configuration problems are distinguishable from source restrictions.
+
 The set index and exact normalized set names discover URLs; no guessed numeric
 URLs or individually crawled card pages are used. Set selection prefers cached
 pages and then larger coverage of still-missing cards, with stable tie breaking.
@@ -51,6 +59,9 @@ matching mana cost, and matching power/toughness when present. Names are never
 matched fuzzily. Card blocks must include the expected heading/type/illustrator
 structure. Only rules paragraphs are extracted; names, type and statistics do not
 leak into rules. Known mana/tap symbols are converted to `{G}` / `{T}` notation.
+When several direct face headings share a container, each heading starts a new
+face segment. Costs, rules and P/T stop at the next heading; the shared illustrator
+footer establishes that the enclosing card block was received completely.
 Unsupported/ambiguous structures stay unresolved. Conflicting translations from
 variants in one list are reported, not chosen arbitrarily.
 
