@@ -37,7 +37,7 @@ def build(cards):
     with tempfile.TemporaryDirectory() as directory:
         with contextlib.chdir(directory), patch.object(builder, "request", return_value=io.BytesIO(payload)):
             with contextlib.redirect_stdout(io.StringIO()):
-                builder.create_database("offline-fixture", "2026-09-17T00:00:00Z")
+                builder.create_database("offline-fixture", "2026-09-17T00:00:00Z", {"atomic_payload": {"meta": {"date": "2026-09-24"}, "data": {}}, "gallery": False})
             with sqlite3.connect("dist/deckloom-card-index.sqlite") as db:
                 db.row_factory = sqlite3.Row
                 result = {t: [dict(r) for r in db.execute(f"SELECT * FROM {t}")]
@@ -187,7 +187,7 @@ class JapaneseLanguageTests(unittest.TestCase):
         row = build([old, new])['cards'][0]
         self.assertEqual(row['japanese_text'], 'トランプル')
         self.assertEqual(row['japanese_scryfall_id'], 'old')
-        self.assertIsNone(row['japanese_type_line'])
+        self.assertEqual(row['japanese_type_line'], 'クリーチャー — ビースト')
 
     def test_mixed_paragraphs_are_detected(self):
         result = build([printing('mixed', '2026-01-01', oracle_text='Flying\nTrample',
@@ -282,60 +282,6 @@ class JapaneseLanguageTests(unittest.TestCase):
         self.assertEqual(result['audit']['cards']['incomplete'][0]['untranslated'][0]['field'],
                          'printed_type_line')
 
-
-class ReviewedOverrideTests(unittest.TestCase):
-    def uthros_fixture(self):
-        entry = next(iter(builder.load_japanese_overrides().values()))
-        card = printing(entry['scryfall_id'], '2025-08-01', name='Uthros Scanship',
-                        oracle_id=entry['oracle_id'], set=entry['set'],
-                        collector_number=entry['collector_number'],
-                        printed_name='ウスロスの探査船', printed_type_line=None,
-                        printed_text='Draw two cards, then discard a card.',
-                        oracle_text='Draw two cards, then discard a card.')
-        return card, entry
-
-    def test_reviewed_printing_recovery_is_recorded_and_keeps_oracle(self):
-        card, entry = self.uthros_fixture()
-        result = build([card]); row = result['cards'][0]
-        self.assertEqual(row['japanese_text'], entry['fields']['printed_text'])
-        self.assertEqual(row['japanese_type_line'], 'アーティファクト — 宇宙船')
-        self.assertEqual(row['english_oracle_text'], card['oracle_text'])
-        self.assertEqual(row['japanese_scryfall_id'], card['id'])
-        observed = result['audit']['reviewed_overrides']['observed'][0]
-        self.assertEqual(set(observed['applied_fields']), {'printed_text', 'printed_type_line'})
-        self.assertEqual(observed['source'], entry['source'])
-        self.assertEqual(result['manifest']['reviewed_japanese_overrides_applied'], 1)
-        self.assertEqual(result['audit']['cards']['complete'], 1)
-
-    def test_valid_upstream_japanese_takes_precedence(self):
-        card, _ = self.uthros_fixture()
-        card.update(printed_text='取得元で修正された日本語本文。', printed_type_line='アーティファクト — 宇宙船')
-        result = build([card])
-        self.assertEqual(result['cards'][0]['japanese_text'], card['printed_text'])
-        self.assertEqual(result['audit']['reviewed_overrides']['observed'][0]['applied_fields'], [])
-        self.assertEqual(result['manifest']['reviewed_japanese_overrides_applied'], 0)
-
-    def test_override_is_bound_to_exact_printing_and_oracle(self):
-        card, _ = self.uthros_fixture()
-        for field, bad in [('oracle_id', 'wrong'), ('lang', 'en'), ('set', 'other'), ('collector_number', '99')]:
-            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'identity mismatch'):
-                builder.apply_japanese_override(dict(card, **{field: bad}), builder.load_japanese_overrides())
-        other = dict(card, id='another-printing')
-        self.assertIsNone(builder.apply_japanese_override(other, builder.load_japanese_overrides()))
-        self.assertEqual(other['printed_text'], card['printed_text'])
-
-    def test_override_loader_rejects_missing_provenance_and_english_text(self):
-        entry = next(iter(builder.load_japanese_overrides().values()))
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / 'overrides.json'
-            for change in ('source', 'text', 'duplicate'):
-                bad = copy.deepcopy(entry)
-                if change == 'source': bad['source']['sha256'] = ''
-                if change == 'text': bad['fields']['printed_text'] = 'Draw a card.'
-                entries = [bad, bad] if change == 'duplicate' else [bad]
-                path.write_text(json.dumps({'schema_version': 1, 'printings': entries}))
-                with self.subTest(change=change), self.assertRaises(ValueError):
-                    builder.load_japanese_overrides(path)
 
 
 if __name__ == "__main__":

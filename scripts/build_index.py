@@ -12,9 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 if __package__:
-    from . import japanese_supplements
+    from . import japanese_enrichment
 else:
-    import japanese_supplements
+    import japanese_enrichment
 
 API_URL = "https://api.scryfall.com/bulk-data"
 HEADERS = {
@@ -386,7 +386,7 @@ def usable_japanese_value(face, key):
     value = face.get(key)
     if not str(value or "").strip():
         return None
-    if japanese_language_issue(value, key, face.get("oracle_text")):
+    if japanese_enrichment.content_issue(value, key, face.get("oracle_text"), sys.modules[__name__]):
         return None
     return value
 
@@ -424,7 +424,7 @@ def japanese_content_quality(card):
         for key in fields:
             label = f"face[{index}].{key}" if card.get("card_faces") else key
             value = face.get(key)
-            reason = japanese_language_issue(value, key, face.get("oracle_text"))
+            reason = japanese_enrichment.content_issue(value, key, face.get("oracle_text"), sys.modules[__name__])
             if not str(value or "").strip():
                 missing.append(label)
             elif reason:
@@ -762,54 +762,8 @@ def process_token(cur, card, token_states, token_term_votes):
             st["jp_date"] = release
 
 
-def load_japanese_overrides(path=None):
-    path = Path(path) if path else Path(__file__).resolve().parents[1] / "data/japanese-printing-overrides.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("schema_version") != 1:
-        raise ValueError("Unsupported Japanese override schema")
-    result = {}
-    for entry in payload["printings"]:
-        sid = entry["scryfall_id"]
-        if sid in result or entry["lang"] != "ja" or not entry["oracle_id"]:
-            raise ValueError(f"Invalid or duplicate Japanese override: {sid}")
-        if not entry["set"] or not entry["collector_number"] or not entry["reviewed_at"]:
-            raise ValueError(f"Missing override provenance: {sid}")
-        source = entry["source"]
-        if (source["kind"] != "printed_card_image" or not source["url"].startswith("https://")
-                or not re.fullmatch(r"[0-9a-f]{64}", source["sha256"])):
-            raise ValueError(f"Invalid image provenance: {sid}")
-        fields = entry["fields"]
-        if not fields or set(fields) - {"printed_name", "printed_type_line", "printed_text"}:
-            raise ValueError(f"Invalid override fields: {sid}")
-        if any(not str(value).strip() or not JAPANESE_CHAR.search(str(value))
-               or japanese_language_issue(value, key) for key, value in fields.items()):
-            raise ValueError(f"Override is not reviewed Japanese text: {sid}")
-        result[sid] = entry
-    return result
-
-
-def apply_japanese_override(card, overrides):
-    entry = overrides.get(card.get("id"))
-    if not entry:
-        return None
-    for key in ("oracle_id", "lang", "set", "collector_number"):
-        if card.get(key) != entry[key]:
-            raise ValueError(f"Japanese override identity mismatch: {card.get('id')} {key}")
-    if card.get("card_faces"):
-        raise ValueError("Multi-face overrides require explicit face provenance support")
-    applied = []
-    for key, value in entry["fields"].items():
-        if usable_japanese_value(card, key) is None:
-            card[key] = value
-            applied.append(key)
-    return {"scryfall_id": card["id"], "oracle_id": card["oracle_id"],
-            "applied_fields": applied, "source": entry["source"],
-            "reviewed_at": entry["reviewed_at"]}
-
-
-def create_database(download_uri, bulk_updated_at):
-    overrides = load_japanese_overrides()
-    override_audit = []
+def create_database(download_uri, bulk_updated_at, enrichment_options=None):
+    collector = japanese_enrichment.Collector(sys.modules[__name__])
     os.makedirs("dist", exist_ok=True)
     db_path = "dist/deckloom-card-index.sqlite"
     gz_path = db_path + ".gz"
@@ -1005,9 +959,7 @@ def create_database(download_uri, bulk_updated_at):
                         continue
                     total_printings += 1
                     card = json.loads(line)
-                    override = apply_japanese_override(card, overrides)
-                    if override is not None:
-                        override_audit.append(override)
+                    collector.observe(card)
 
                     for keyword in card.get("keywords") or []:
                         keywords_seen.add(keyword)
@@ -1218,7 +1170,11 @@ def create_database(download_uri, bulk_updated_at):
             VALUES ('token', ?, ?, ?, ?)
         """, (canonical, localized, source, count))
 
-    supplement_audit = japanese_supplements.apply(cur, sys.modules[__name__])
+    enrichment = japanese_enrichment.enrich(cur, sys.modules[__name__], collector, **(enrichment_options or {}))
+    with open("dist/japanese-enrichment.json", "w", encoding="utf-8") as f:
+        json.dump(enrichment, f, ensure_ascii=False, indent=2)
+    if cur.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+        raise RuntimeError("Generated SQLite failed integrity_check")
     conn.commit()
     cur.execute("ANALYZE")
     conn.commit()
@@ -1228,13 +1184,9 @@ def create_database(download_uri, bulk_updated_at):
     alias_count = cur.execute("SELECT COUNT(*) FROM card_aliases").fetchone()[0]
     token_count = cur.execute("SELECT COUNT(*) FROM tokens").fetchone()[0]
     coverage = japanese_coverage(cur, card_state, token_states)
-    # Existing counts describe Scryfall printing coverage; supplements are
-    # separately attributed, without inventing a Japanese printing ID.
-    coverage["reviewed_card_supplements"] = supplement_audit
-    coverage["reviewed_overrides"] = {
-        "observed": override_audit,
-        "not_observed": sorted(set(overrides) - {item["scryfall_id"] for item in override_audit}),
-    }
+    # This section is explicitly the pre-enrichment Scryfall printing selection.
+    coverage["scope"] = "Scryfall printing selection before automatic field enrichment"
+    coverage["automatic_enrichment"] = enrichment["summary"]
     with open("dist/japanese-coverage.json", "w", encoding="utf-8") as f:
         json.dump(coverage, f, ensure_ascii=False, indent=2)
     conn.close()
@@ -1251,7 +1203,9 @@ def create_database(download_uri, bulk_updated_at):
     gz_bytes = os.path.getsize(gz_path)
     manifest = {
         "schema_version": 4,
-        "reviewed_japanese_cards_supplemented": len(supplement_audit["applied"]),
+        "automatic_japanese_enrichment": enrichment["summary"],
+        "japanese_enrichment_report": "japanese-enrichment.json",
+        "mtgjson_source": enrichment["mtgjson"],
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scryfall_bulk_updated_at": bulk_updated_at,
         "unique_cards": len(seen_oracles),
@@ -1268,7 +1222,6 @@ def create_database(download_uri, bulk_updated_at):
             for table, section in coverage.items()
             if table in ("cards", "tokens")
         },
-        "reviewed_japanese_overrides_applied": sum(bool(item["applied_fields"]) for item in override_audit),
         "database": os.path.basename(db_path),
         "database_bytes": db_bytes,
         "database_sha256": sha256_file(db_path),
