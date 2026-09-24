@@ -24,7 +24,8 @@ their loaders have been removed. General UI vocabulary dictionaries are unchange
    Parse `.card-info h2`, `p.type` and `p.text`, preserving inline mana symbols.
    Unknown symbols, ambiguous text or mismatched face counts are not adopted.
 4. Meld components and results remain separate Oracle IDs. A component's gallery
-   result block is not treated as its back face.
+   result block is not treated as its back face. The matching block must be
+   uniquely identified by its English rules; ambiguous matches are deferred.
 
 Existing usable values win. Only missing or suspect fields are candidates for
 replacement. Canonical English Oracle, printing/image selection, legality and
@@ -40,7 +41,8 @@ preserved and explicitly marked unverified, never counted as proven complete.
 ## Autonomous runs
 
 Main-branch code updates, manual runs on main, and the daily schedule generate
-and validate the database before publishing. Runs are serialized. Fresh source
+and validate the database before publishing. Pull requests also run full generation
+and save artifacts, without publishing. Release runs are serialized. Fresh source
 failure or MTGJSON checksum mismatch stops publication; it does not silently
 publish a reduced-source DB. Previous release assets remain until validation
 passes. The manifest is uploaded after the database assets.

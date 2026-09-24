@@ -8,6 +8,12 @@ on:
       - "tests/**"
       - "requirements.txt"
       - ".github/workflows/update-card-index.yml"
+  pull_request:
+    paths:
+      - "scripts/**"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/update-card-index.yml"
   workflow_dispatch:
 
   schedule:
@@ -19,12 +25,11 @@ permissions:
   contents: write
 
 concurrency:
-  group: deckloom-card-index-release
+  group: deckloom-card-index-${{ github.event_name == 'pull_request' && github.ref || 'release' }}
   cancel-in-progress: false
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -67,6 +72,7 @@ jobs:
             dist/japanese-enrichment.json
             dist/japanese-coverage.json
             dist/manifest.json
+            dist/deckloom-card-index.sqlite.gz
           if-no-files-found: ignore
 
       - name: Show generated files
@@ -74,6 +80,7 @@ jobs:
           ls -lh dist/
 
       - name: Create latest release if missing
+        if: github.ref == 'refs/heads/main'
         run: |
           gh release view card-index-latest >/dev/null 2>&1 || \
           gh release create card-index-latest \
@@ -83,6 +90,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Upload latest database
+        if: github.ref == 'refs/heads/main'
         run: |
           gh release upload card-index-latest \
             dist/deckloom-card-index.sqlite \

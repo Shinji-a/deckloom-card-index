@@ -398,7 +398,13 @@ def apply_gallery(rows, state, collector, client, helpers, report):
                 continue
             parsed, digest = jobs[url]
             if row['layout'] == 'meld' and len(faces) == 1:
-                parsed = parsed[:1]
+                # Both component URLs can display the shared meld result. Bind the
+                # block by its English rules, not by its position on the page.
+                wanted = normalized(without_reminder(faces[0].get('oracle_text')))
+                parsed = [p for p in parsed if normalized(without_reminder(p['_english_text'])) == wanted]
+                if len(parsed) != 1:
+                    report['source_errors'].append({'url': url, 'reason': 'meld_identity_ambiguous'})
+                    continue
             if len(parsed) != len(faces):
                 report['source_errors'].append({'url': url, 'reason': 'face_count_mismatch'})
                 continue

@@ -132,15 +132,19 @@ class GalleryParserTests(unittest.TestCase):
     def test_exact_linked_multiverse_id_and_meld_component(self):
         card=printing('en','2026-01-01',lang='en',layout='meld',multiverse_ids=[42],set='abc')
         base=e.GALLERY_URL+'123/'
-        fields='<div class="card-detail"><div class="card-info"><h2>《構成カード》</h2><p class="type">クリーチャー</p><p class="text">トランプル</p></div></div>'
+        fields='<div class="card-detail"><div class="card-info"><h2>《構成カード》</h2><p class="type">クリーチャー</p><p class="text">トランプル</p><p class="text">Trample</p></div></div>'
         class Client:
             sources={}
             def get(self,url):
                 return {e.GALLERY_URL:b'<a href="/products/card-gallery/123/"><div class="_thumb"><img src="/cardSet/ABC_317.jpg"></div></a>',
-                        base:b'<a href="42/">card</a>', base+'42/':(fields+fields.replace('構成カード','合体結果')).encode()}[url]
+                        base:b'<a href="42/">card</a>', base+'42/':(fields+fields.replace('構成カード','合体結果').replace('トランプル','飛行').replace('Trample','Flying')).encode()}[url]
         rows,report=generate([card],client=Client(),gallery=True)
         self.assertEqual(rows[0]['japanese_name'],'構成カード')
         self.assertEqual(report['applied'][0]['applied'][0]['source']['multiverse_id'],42)
+        card['oracle_text']='Flying'
+        rows,report=generate([card],client=Client(),gallery=True)
+        self.assertEqual(rows[0]['japanese_name'],'合体結果')
+        self.assertEqual(rows[0]['japanese_text'],'飛行')
 
     def test_network_failure_does_not_return_expired_cached_data(self):
         with tempfile.TemporaryDirectory() as tmp:
