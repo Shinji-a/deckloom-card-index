@@ -77,6 +77,8 @@ jobs:
           python scripts/build_index.py
 
       - name: Validate generated database
+        env:
+          DECKLOOM_PREVIOUS_DIR: previous
         run: python scripts/validate_index.py dist
 
       - name: Preserve audit reports

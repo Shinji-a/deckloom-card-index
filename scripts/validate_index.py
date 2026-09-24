@@ -61,6 +61,8 @@ def validate(directory):
     if hashlib.sha256(cache.read_bytes()).hexdigest() != manifest['whisper_cache_sha256']:
         raise ValueError('WHISPER cache hash mismatch')
     previous_dir = os.environ.get('DECKLOOM_PREVIOUS_DIR')
+    if report.get('previous_release', {}).get('enabled') and not previous_dir:
+        raise ValueError('Previous release comparison requires DECKLOOM_PREVIOUS_DIR')
     if previous_dir:
         if __package__:
             from . import build_index as helpers
