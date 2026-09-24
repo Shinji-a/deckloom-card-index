@@ -5,10 +5,16 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+if __package__:
+    from . import japanese_supplements
+else:
+    import japanese_supplements
 
 API_URL = "https://api.scryfall.com/bulk-data"
 HEADERS = {
@@ -164,7 +170,24 @@ def normalize_japanese_card_name(value):
 
 
 def japanese_name(card):
+    # Never promote a translated Adventure/back face to the main card name.
+    faces = card.get("card_faces") or []
+    if faces and not usable_japanese_value(card, "printed_name"):
+        if not any(usable_japanese_value(f, "printed_name") for f in faces):
+            return None
+        names = japanese_face_names(faces)
+        return " // ".join(normalize_japanese_card_name(name or face.get("name") or "")
+                           for name, face in zip(names, faces))
     return normalize_japanese_card_name(japanese_field(card, "printed_name", " // "))
+
+
+def japanese_face_names(faces):
+    names = [usable_japanese_value(face, "printed_name") for face in faces]
+    # Older split-card records may store both names on the first face.
+    combined = (names[0] or "").split(" // ") if names else []
+    if len(combined) == len(faces) and len(faces) > 1 and not any(names[1:]):
+        return combined
+    return names
 
 
 def normalized_face_name(value):
@@ -206,7 +229,7 @@ def face_json(card, localized=False):
         return None
 
     result = []
-    for face in faces:
+    for face_index, face in enumerate(faces):
         item = {
             "name": face.get("name"),
             "type_line": face.get("type_line"),
@@ -220,7 +243,7 @@ def face_json(card, localized=False):
         }
         if localized:
             item.update({
-                "printed_name": usable_japanese_value(face, "printed_name"),
+                "printed_name": normalize_japanese_card_name(japanese_face_names(faces)[face_index]),
                 "printed_type_line": usable_japanese_value(face, "printed_type_line"),
                 "printed_text": usable_japanese_value(face, "printed_text"),
             })
@@ -1193,6 +1216,7 @@ def create_database(download_uri, bulk_updated_at):
             VALUES ('token', ?, ?, ?, ?)
         """, (canonical, localized, source, count))
 
+    supplement_audit = japanese_supplements.apply(cur, sys.modules[__name__])
     conn.commit()
     cur.execute("ANALYZE")
     conn.commit()
@@ -1202,6 +1226,9 @@ def create_database(download_uri, bulk_updated_at):
     alias_count = cur.execute("SELECT COUNT(*) FROM card_aliases").fetchone()[0]
     token_count = cur.execute("SELECT COUNT(*) FROM tokens").fetchone()[0]
     coverage = japanese_coverage(cur, card_state, token_states)
+    # Existing counts describe Scryfall printing coverage; supplements are
+    # separately attributed, without inventing a Japanese printing ID.
+    coverage["reviewed_card_supplements"] = supplement_audit
     coverage["reviewed_overrides"] = {
         "observed": override_audit,
         "not_observed": sorted(set(overrides) - {item["scryfall_id"] for item in override_audit}),
@@ -1222,6 +1249,7 @@ def create_database(download_uri, bulk_updated_at):
     gz_bytes = os.path.getsize(gz_path)
     manifest = {
         "schema_version": 4,
+        "reviewed_japanese_cards_supplemented": len(supplement_audit["applied"]),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scryfall_bulk_updated_at": bulk_updated_at,
         "unique_cards": len(seen_oracles),
