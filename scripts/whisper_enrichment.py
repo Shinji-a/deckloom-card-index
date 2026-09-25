@@ -132,6 +132,10 @@ def set_key(value):
     return re.sub(r'^magicthegathering', '', value)
 
 
+def english_face_key(value):
+    return unicodedata.normalize('NFKC', value).casefold()
+
+
 def parse_index(raw):
     soup = BeautifulSoup(raw, 'html.parser')
     found = defaultdict(set)
@@ -197,13 +201,40 @@ def parse_set(raw):
             type_match = re.fullmatch(r'(.*?)\s+([A-Z0-9]+),\s*(.+)', divs[0])
             if not type_match:
                 continue
-            cost_raw = re.sub(r'^\s*（[ぁ-ゖゝゞー]+）', '', ''.join(cost_parts))
+            # Older readings use spacing dakuten, e.g. う゛, not only composed ゔ.
+            cost_raw = re.sub(r'^\s*（[ぁ-ゟー]+）', '', ''.join(cost_parts))
             cost = symbols(cost_raw).strip()
             if cost and not re.fullmatch(r'(?:\{[^{}]+\})+', cost):
                 continue
-            records.append({'heading': a.get_text('', strip=True), 'set': type_match[2].lower(),
-                            'type': type_match[1], 'text': '\n'.join(p for p in paragraphs if p),
-                            'mana_cost': cost, 'stats': divs[1:], 'card_url': a['href'].replace('http:', 'https:')})
+            record = {'heading': a.get_text('', strip=True), 'set': type_match[2].lower(),
+                      'type': type_match[1], 'text': '\n'.join(p for p in paragraphs if p),
+                      'mana_cost': cost, 'stats': divs[1:], 'card_url': a['href'].replace('http:', 'https:')}
+            spell_type = r'(?:インスタント|ソーサリー)(?:\s*[—―].+)?'
+            markers = [i for i, p in enumerate(paragraphs) if p == '//準備//']
+            # Some source blocks omit the marker; require a complete bilingual
+            # heading/cost/type sequence and prepared rules in the parent.
+            implicit = [i for i in range(1, len(paragraphs) - 3)
+                        if '/' in paragraphs[i]
+                        and re.fullmatch(r'(?:\{[^{}]+\})+', paragraphs[i + 1])
+                        and re.fullmatch(spell_type, paragraphs[i + 2])
+                        and any('準備' in p for p in paragraphs[:i])]
+            boundaries = markers or implicit
+            if boundaries:
+                boundary = boundaries[0]
+                record['text'] = '\n'.join(p for p in paragraphs[:boundary] if p)
+                records.append(record)
+                spell = paragraphs[boundary + (1 if markers else 0):]
+                if (len(boundaries) == 1 and len(spell) >= 3 and '/' in spell[0]
+                        and re.fullmatch(r'(?:\{[^{}]+\})+', spell[1])):
+                    has_type = bool(re.fullmatch(spell_type, spell[2]))
+                    body = spell[3:] if has_type else spell[2:]
+                    if body:
+                        records.append({**record, 'heading': spell[0], 'mana_cost': spell[1],
+                                        'type': spell[2] if has_type else None,
+                                        'text': '\n'.join(p for p in body if p),
+                                        'stats': [], 'parent_heading': record['heading']})
+            else:
+                records.append(record)
     if not records:
         raise ValueError('WHISPER card list contains no validated blocks')
     return records
@@ -221,12 +252,21 @@ def target(row, faces, helpers, e):
 
 def candidates(records, row, faces, set_codes, source, helpers):
     result = []
+    parent_names = {english_face_key(face['name']) for face in faces}
     for face in faces:
+        expected_name = english_face_key(face['name'])
         for record in records:
-            suffix = '/' + face['name']
-            if record['set'] not in set_codes or not record['heading'].endswith(suffix):
+            if record.get('parent_heading') and not re.match(r'^(Instant|Sorcery)(?:$| —)', face.get('type_line') or ''):
                 continue
-            jpname = record['heading'][:-len(suffix)]
+            if (record.get('parent_heading') and
+                    english_face_key(record['parent_heading'].rpartition('/')[2]) not in parent_names):
+                continue
+            jpname, separator, english = record['heading'].rpartition('/')
+            # Historical printings use AEther where canonical Oracle uses Aether.
+            # Compare case-insensitively; do not fuzzy-match different words.
+            if (record['set'] not in set_codes or not separator
+                    or english_face_key(english) != expected_name):
+                continue
             if not helpers.JAPANESE_CHAR.search(jpname) or '仮訳' in jpname:
                 continue
             if (face.get('mana_cost') or '') != record['mana_cost']:
@@ -237,7 +277,7 @@ def candidates(records, row, faces, set_codes, source, helpers):
             result.append({'face': face['name'], 'fields': {
                 'printed_name': jpname, 'printed_type_line': record['type'], 'printed_text': record['text']},
                 'source': {**source, 'card_url': record['card_url'], 'set': record['set'],
-                           'match': 'exact_english_face_set_mana_and_available_pt'}})
+                           'match': 'casefold_english_face_exact_set_mana_and_available_pt'}})
     return result
 
 

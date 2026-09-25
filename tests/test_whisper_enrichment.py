@@ -66,6 +66,18 @@ class WhisperTests(unittest.TestCase):
         self.assertEqual(w.symbols('（(２),(Ｔ)：(緑)を加える。）'), '（{2},{T}：{G}を加える。）')
         self.assertEqual(w.symbols('ビースト(Beast)'), 'ビースト(Beast)')
 
+    def test_legacy_reading_dakuten_is_not_mistaken_for_mana(self):
+        for reading in ['しけんう゛ぁー', 'しけんう\u3099ぁー', 'しけんゔぁー']:
+            raw = HTML.replace('しけんじゅう'.encode(), reading.encode())
+            self.assertEqual(w.parse_set(raw)[0]['mana_cost'], '{2}{G}')
+
+    def test_english_printing_case_variants_still_require_same_words(self):
+        records = w.parse_set(HTML)
+        records[0]['heading'] = '試験獣/TEST BEAST'
+        self.assertEqual(len(w.candidates(records, {}, [FACE], {'tst'}, {}, b)), 1)
+        records[0]['heading'] = '試験獣/Test Beasts'
+        self.assertEqual(w.candidates(records, {}, [FACE], {'tst'}, {}, b), [])
+
     def test_reject_challenge_or_incomplete_block(self):
         for raw in [b'<h1>Verify you are human</h1>', HTML.replace(b'<div>Illus.Test (1/1)</div>', b'')]:
             with self.assertRaises(ValueError):
@@ -94,6 +106,46 @@ class WhisperTests(unittest.TestCase):
         self.assertEqual(faces[0]['printed_text'], beast['text'])
         with self.assertRaises(ValueError):
             w.parse_set(multi.replace(b'<div>Illus.Test (1/1)</div>', b''))
+
+    def test_prepared_spell_marker_separates_body_and_binds_parent(self):
+        block = ('<p>//準備//</p><p>試験の呪文/Test Spell</p><p>(青)</p>'
+                 '<p>インスタント</p><p>占術１を行う。</p>').encode()
+        raw = HTML.replace(b'<div>3/3</div>', block+b'<div>3/3</div>')
+        records = w.parse_set(raw)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]['text'], w.parse_set(HTML)[0]['text'])
+        self.assertIn('3/3', records[0]['stats'])
+        self.assertEqual(records[1]['stats'], [])
+        self.assertEqual(records[1]['text'], '占術１を行う。')
+        self.assertEqual(records[1]['mana_cost'], '{U}')
+        spell = {'name':'Test Spell','mana_cost':'{U}', 'type_line':'Instant','oracle_text':'Scry 1.'}
+        candidates = w.candidates(records, {}, [FACE, spell], {'tst'}, {}, b)
+        self.assertTrue(any(c['face']=='Test Spell' for c in candidates))
+        self.assertEqual(w.candidates(records, {}, [spell], {'tst'}, {}, b), [])
+        audit = {'applied':[], 'conflicts':[]}
+        e.apply_candidates([dict(FACE), spell], candidates, b, audit)
+        self.assertEqual(spell['printed_name'], '試験の呪文')
+        self.assertEqual(spell['printed_text'], '占術１を行う。')
+
+    def test_prepared_optional_marker_or_type_still_requires_cost_and_parent(self):
+        parent = HTML.replace('カード１枚'.encode(), '準備済状態になり、カード１枚'.encode())
+        for block in [
+                '<p>試験の呪文/Test Spell</p><p>(青)</p><p>インスタント</p><p>占術１を行う。</p>',
+                '<p>//準備//</p><p>試験の呪文/Test Spell</p><p>(青)</p><p>占術１を行う。</p>']:
+            records = w.parse_set(parent.replace(b'<div>3/3</div>', block.encode()+b'<div>3/3</div>'))
+            self.assertEqual(len(records), 2)
+            self.assertNotIn('占術', records[0]['text'])
+            spell = {'name':'Test Spell','mana_cost':'{U}', 'type_line':'Instant','oracle_text':'Scry 1.'}
+            audit = {'applied':[], 'conflicts':[]}
+            e.apply_candidates([dict(FACE), spell], w.candidates(records, {}, [FACE, spell], {'tst'}, {}, b), b, audit)
+            self.assertEqual(spell['printed_text'], '占術１を行う。')
+            self.assertEqual(w.candidates(records, {}, [FACE, {**spell,'mana_cost':'{R}'}], {'tst'}, {}, b)[-1]['face'], FACE['name'])
+
+    def test_incomplete_prepared_spell_cannot_pollute_parent(self):
+        block = '<p>//準備//</p><p>試験の呪文/Test Spell</p><p>(青)</p>'.encode()
+        records = w.parse_set(HTML.replace(b'<div>3/3</div>',block+b'<div>3/3</div>'))
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]['text'], w.parse_set(HTML)[0]['text'])
 
     def test_identity_cost_pt_and_set_must_match(self):
         records = w.parse_set(HTML)
