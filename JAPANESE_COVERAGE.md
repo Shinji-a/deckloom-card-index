@@ -54,14 +54,21 @@ printed text. Canonical English Oracle is never replaced.
 
 ## Identity, content and attribution
 
-WHISPER candidates require an exact English face name and known set membership,
+WHISPER candidates require the same English face name after Unicode NFKC and
+case folding (e.g. legacy AEther versus Aether) and known set membership,
 matching mana cost, and matching power/toughness when present. Names are never
 matched fuzzily. Card blocks must include the expected heading/type/illustrator
 structure. Only rules paragraphs are extracted; names, type and statistics do not
 leak into rules. Known mana/tap symbols are converted to `{G}` / `{T}` notation.
+Legacy hiragana readings containing separate dakuten, such as `う゛`, are removed
+from the cost prefix in the same way as modern composed readings.
 When several direct face headings share a container, each heading starts a new
 face segment. Costs, rules and P/T stop at the next heading; the shared illustrator
 footer establishes that the enclosing card block was received completely.
+Prepared spell sections marked `//準備//` are separated into name, mana cost,
+instant/sorcery type and rules. They must match both their parent face and spell
+face; the parent keeps its own rules and P/T, and the spell never inherits P/T.
+Malformed spell sections remain unresolved instead of being merged into parent rules.
 Unsupported/ambiguous structures stay unresolved. Conflicting translations from
 variants in one list are reported, not chosen arbitrarily.
 
@@ -94,6 +101,12 @@ policy, cache hash and no loss of usable previous Japanese fields with unchanged
 English identity/rules. Publication uploads the manifest last. The optional new
 provenance table requires no Android application/schema migration.
 
+After each successful main build, `Verify Published Japanese Index` downloads the
+published release, verifies its hash and SQLite integrity, counts remaining gaps,
+checks the reported Godmaw/Scanship/Zanarkand examples, and reuses all fresh cached
+pages with network forbidden. Its compact artifact is a post-publication receipt;
+the audit itself never requests WHISPER or changes the published database.
+
 `japanese-coverage.json` remains explicitly a pre-enrichment Scryfall screening
 report. Use `japanese-enrichment.json` for final unresolved fields, deferred cards,
 source failures, cache/network counts and accepted supplements.
@@ -112,3 +125,9 @@ DECKLOOM_PREVIOUS_DIR=previous python scripts/validate_index.py dist
 Set `DECKLOOM_WHISPER_OFFLINE=1` for offline WHISPER use. The pacing/concurrency
 constants have no environment-variable override. Existing Android clients only
 need to update their search database after publication.
+
+Prepared spell parsing also accepts a missing type line when the bilingual name,
+parent, set and mana match, without inventing a Japanese type. A missing separator
+is accepted only for an unambiguous name/cost/type sequence following prepared
+rules. Missing mana remains unresolved. These are general source-format rules,
+not card-specific replacement data.

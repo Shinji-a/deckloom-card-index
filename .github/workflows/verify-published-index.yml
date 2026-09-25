@@ -2,6 +2,10 @@ name: Verify Published Japanese Index
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Update DeckLoom Card Index"]
+    types: [completed]
+    branches: [main]
   pull_request:
     paths:
       - ".github/workflows/verify-published-index.yml"
@@ -11,6 +15,7 @@ permissions:
 
 jobs:
   inspect:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
