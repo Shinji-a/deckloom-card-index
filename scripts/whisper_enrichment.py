@@ -206,7 +206,7 @@ def parse_set(raw):
             divs = [x.get_text(' ', strip=True) for x in direct if x.name == 'div']
             if not divs:
                 continue
-            type_match = re.fullmatch(r'(.*?)\s+([A-Z0-9]+),\s*(.+)', divs[0])
+            type_match = re.fullmatch(r'(.*?)\s+([A-Z0-9]+),\s*(.*)', divs[0])
             if not type_match:
                 continue
             # Older readings use spacing dakuten, e.g. う゛, not only composed ゔ.
