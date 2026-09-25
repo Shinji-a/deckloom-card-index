@@ -79,6 +79,8 @@ class Client:
                 self.used[url] = {**cached[1], 'cache': True, 'stale': False}
                 return parsed
             if not self.offline and not self.halted and self.requests < MAX_REQUESTS:
+                data = None
+                response_info = {}
                 try:
                     if self.last_finished is not None:
                         self.sleep(max(0, MIN_INTERVAL - (self.clock() - self.last_finished)))
@@ -91,6 +93,8 @@ class Client:
                     self.requests += 1
                     try:
                         with self.open(req, timeout=45) as response:
+                            response_info = {'status': getattr(response, 'status', None),
+                                             'content_type': getattr(response, 'headers', {}).get('Content-Type', '')}
                             data = response.read(2 * 1024 * 1024 + 1)
                     finally:
                         self.last_finished = self.clock()
@@ -106,6 +110,10 @@ class Client:
                     return parsed
                 except (OSError, ValueError) as exc:
                     error = {'url': url, 'reason': str(exc)[:250]}
+                    if data is not None:
+                        error.update(response_info, response_bytes=len(data),
+                                     response_sha256=hashlib.sha256(data).hexdigest(),
+                                     body_excerpt=data[:2048].decode('utf-8', 'replace'))
                     if isinstance(exc, urllib.error.HTTPError):
                         error.update(status=exc.code,
                                      content_type=exc.headers.get('Content-Type', ''),
