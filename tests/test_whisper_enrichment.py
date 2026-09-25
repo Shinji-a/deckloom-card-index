@@ -71,6 +71,12 @@ class WhisperTests(unittest.TestCase):
             self.assertEqual(c.errors[0]['response_sha256'], hashlib.sha256(page).hexdigest())
             self.assertIsNone(c.cached(w.ORIGIN+'/cardlist/Test/'))
 
+    def test_absent_rarity_does_not_discard_valid_legacy_card(self):
+        raw = HTML.replace('TST, コモン'.encode(), b'TST, ')
+        self.assertEqual(w.parse_set(raw), w.parse_set(HTML))
+        with self.assertRaises(ValueError):
+            w.parse_set(raw.replace(b'TST, ', b', '))
+
     def test_parse_reading_symbols_and_complete_body(self):
         record = w.parse_set(HTML)[0]
         self.assertEqual(record['mana_cost'], '{2}{G}')
