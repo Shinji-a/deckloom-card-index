@@ -59,6 +59,18 @@ class WhisperTests(unittest.TestCase):
             self.assertIn('cardset.php', c.errors[0]['body_excerpt'])
             self.assertEqual(c.errors[0]['alternatives'], 'application/x-httpd-php')
 
+    def test_invalid_success_response_keeps_bounded_diagnostic_and_halts(self):
+        page = b'<title>Temporary unavailable</title>' + b'x' * 5000
+        with tempfile.TemporaryDirectory() as tmp:
+            c = w.Client(tmp, opener=lambda *a, **k: io.BytesIO(page))
+            self.assertIsNone(c.get(w.ORIGIN+'/cardlist/Test/', w.parse_set))
+            self.assertIsNone(c.get(w.INDEX, w.parse_index))
+            self.assertEqual(c.requests, 1)
+            self.assertEqual(c.errors[0]['response_bytes'], len(page))
+            self.assertEqual(len(c.errors[0]['body_excerpt']), 2048)
+            self.assertEqual(c.errors[0]['response_sha256'], hashlib.sha256(page).hexdigest())
+            self.assertIsNone(c.cached(w.ORIGIN+'/cardlist/Test/'))
+
     def test_parse_reading_symbols_and_complete_body(self):
         record = w.parse_set(HTML)[0]
         self.assertEqual(record['mana_cost'], '{2}{G}')
