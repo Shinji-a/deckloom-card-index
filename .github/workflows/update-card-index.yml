@@ -78,7 +78,16 @@ jobs:
             --event push --status failure --limit 1 --json databaseId --jq '.[0].databaseId // empty')
           if [ -n "$failed_run" ]; then
             if gh run download "$failed_run" --name japanese-db-audit --dir recovery; then
-              python -c "from scripts.previous_database import prepare; prepare('recovery')"
+              python - <<'PY'
+          import json
+          from datetime import datetime
+          from pathlib import Path
+          from scripts.previous_database import prepare
+          published = json.loads(Path('previous/manifest.json').read_text())
+          recovered = json.loads(Path('recovery/manifest.json').read_text())
+          if datetime.fromisoformat(recovered['generated_at']) > datetime.fromisoformat(published['generated_at']):
+              prepare('recovery')
+          PY
             fi
           fi
           # Only source cache is recovered. DECKLOOM_PREVIOUS_DIR remains the
