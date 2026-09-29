@@ -107,6 +107,15 @@ class WhisperTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             w.parse_set(raw.replace(b'TST, ', b', '))
 
+    def test_legacy_underscore_set_ids_parse_without_guessing_set_aliases(self):
+        raw = HTML.replace(b'TST001', b'_BD001').replace(b'TST,', b'_BD,')
+        records = w.parse_set(raw)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]['set'], '_bd')
+        self.assertTrue(records[0]['card_url'].endswith('/_BD001/'))
+        self.assertEqual(w.candidates(records, {}, [FACE], {'btd'}, {}, b), [])
+        self.assertEqual(len(w.candidates(records, {}, [FACE], {'_bd'}, {}, b)), 1)
+
     def test_parse_reading_symbols_and_complete_body(self):
         record = w.parse_set(HTML)[0]
         self.assertEqual(record['mana_cost'], '{2}{G}')

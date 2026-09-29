@@ -35,6 +35,11 @@ fields are retained from the previous release with their original attribution.
   use existing cache offline, so PR/main jobs cannot duplicate WHISPER traffic.
 - Cache is shipped as a hash-verified release asset, `whisper-cache.tar.gz`, and
   restored on the next run. It does not depend on the Actions cache retention period.
+- Main builds also recover validated source pages from the most recent failed
+  main-push build's audit artifact, when available. The existing recovery helper
+  verifies its manifest/SQLite/archive hashes and safe archive paths. Only source
+  cache is reused; previous card fields still come from the published release.
+  This avoids requesting already acquired pages again after a publication gate fails.
 - The app queries its own database, never WHISPER on each user search.
 
 Requests prefer HTML but also allow a low-priority `*/*` media type. The public
@@ -67,6 +72,9 @@ structure. Only rules paragraphs are extracted; names, type and statistics do no
 leak into rules. Known mana/tap symbols are converted to `{G}` / `{T}` notation.
 Legacy hiragana readings containing separate dakuten, such as `う゛`, are removed
 from the cost prefix in the same way as modern composed readings.
+Legacy card/set identifiers with a leading underscore (such as `_BD`) are parsed
+as written. No guessed mapping to a different Scryfall set code is introduced;
+unmatched candidates remain unused instead of aborting the whole source page.
 When several direct face headings share a container, each heading starts a new
 face segment. Costs, rules and P/T stop at the next heading; the shared illustrator
 footer establishes that the enclosing card block was received completely.

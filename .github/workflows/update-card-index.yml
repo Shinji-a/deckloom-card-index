@@ -23,6 +23,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: deckloom-card-index-${{ github.event_name == 'pull_request' && github.ref || 'release' }}
@@ -67,6 +68,30 @@ jobs:
           python scripts/previous_database.py
         env:
           GH_TOKEN: ${{ github.token }}
+
+      - name: Recover verified source cache from the last failed main push
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          failed_run=$(gh run list --workflow update-card-index.yml --branch main \
+            --event push --status failure --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$failed_run" ]; then
+            if gh run download "$failed_run" --name japanese-db-audit --dir recovery; then
+              python - <<'PY'
+          import json
+          from datetime import datetime
+          from pathlib import Path
+          from scripts.previous_database import prepare
+          published = json.loads(Path('previous/manifest.json').read_text())
+          recovered = json.loads(Path('recovery/manifest.json').read_text())
+          if datetime.fromisoformat(recovered['generated_at']) > datetime.fromisoformat(published['generated_at']):
+              prepare('recovery')
+          PY
+            fi
+          fi
+          # Only source cache is recovered. DECKLOOM_PREVIOUS_DIR remains the
+          # verified published release; unpublished card fields are not retained.
 
       - name: Build Japanese card index
         env:
