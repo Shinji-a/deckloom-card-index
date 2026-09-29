@@ -25,6 +25,10 @@ fields are retained from the previous release with their original attribution.
 - Maximum **50 requests per build**, including the set index. No implicit redirects.
 - No automatic retries. An HTTP/network/parser failure stops new WHISPER network
   requests for that run. Already validated cached pages may still be used.
+- A complete generated set-list page with zero card blocks is a successful empty
+  result, recorded in `whisper.empty_sets`. It must have the expected heading,
+  toolbar, generation notice, footer and closing document; malformed/truncated
+  pages or pages containing unparseable card blocks still stop network requests.
 - Index cache: 7 days; set-page cache: 30 days. Good stale cache is retained if a
   refresh fails. Challenge/error pages never replace validated source pages.
 - Only serialized main-branch builds make WHISPER network requests. PR builds
