@@ -97,7 +97,7 @@ jobs:
               if time.time() - meta['fetched_at'] >= ttl:
                   expired += 1
                   continue
-              assert client.get(url, w.parse_index if url == w.INDEX else w.parse_set, ttl)
+              assert client.get(url, w.parse_index if url == w.INDEX else w.parse_set, ttl) is not None
               fresh += 1
           assert client.requests == 0
 

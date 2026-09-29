@@ -23,9 +23,38 @@ HTML = '''<div class="whisper-cardlist-descript">Wisdom Guild</div>
 FACE = {'name': 'Test Beast', 'mana_cost': '{2}{G}', 'power': '3', 'toughness': '3',
         'oracle_text': 'Trample\nWhen this creature enters, draw a card.', 'type_line': 'Creature — Beast',
         'printed_name': '試験獣', 'printed_type_line': None, 'printed_text': None}
+EMPTY_HTML = '''<html><body><div id="main"><h1>Test カードリスト</h1>
+<div class="right"><a href="../TST.txt">テキスト形式</a></div>
+<div class="whisper-cardlist-descript">このカードリストはデータベースから自動的に生成されました。</div>
+</div><div id="bottom"><div id="copyrights">Wisdom Guild</div></div></body></html>'''.encode()
 
 
 class WhisperTests(unittest.TestCase):
+    def test_complete_empty_set_is_cached_without_halting_later_requests(self):
+        self.assertEqual(w.parse_set(EMPTY_HTML), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = iter([EMPTY_HTML, HTML])
+            client = w.Client(tmp, opener=lambda *a, **kw: io.BytesIO(next(pages)),
+                              clock=lambda: 0, sleep=lambda seconds: None)
+            empty_url = w.ORIGIN + '/cardlist/Empty/'
+            self.assertEqual(client.get(empty_url, w.parse_set), [])
+            self.assertEqual(client.get(empty_url, w.parse_set), [])
+            self.assertEqual(client.requests, 1)
+            self.assertTrue(client.get(w.ORIGIN + '/cardlist/Test/', w.parse_set))
+            self.assertEqual(client.requests, 2)
+            self.assertFalse(client.halted)
+            self.assertEqual(client.errors, [])
+
+    def test_unrecognized_or_broken_empty_pages_still_fail_closed(self):
+        for raw in [EMPTY_HTML.replace(b'</html>', b''),
+                    EMPTY_HTML.replace(b'id="copyrights"', b'id="missing"'),
+                    EMPTY_HTML.replace(b'<h1>', b'<h2>').replace(b'</h1>', b'</h2>'),
+                    EMPTY_HTML.replace(b'</h1>', b'</h1><div>Temporary error</div>'),
+                    EMPTY_HTML.replace(b'</h1>', b'</h1><div class="card">broken card</div>')]:
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError):
+                    w.parse_set(raw)
+
     def test_negotiated_php_handler_can_return_validated_html(self):
         # The live server advertises application/x-httpd-php before executing it.
         # Reproduce that negotiation instead of returning HTML for every request.

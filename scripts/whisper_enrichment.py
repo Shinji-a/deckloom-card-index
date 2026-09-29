@@ -172,6 +172,24 @@ def parse_set(raw):
     soup = BeautifulSoup(raw, 'html.parser')
     if not soup.select_one('.whisper-cardlist-descript'):
         raise ValueError('WHISPER card list header missing or challenge page')
+    # Some published set indexes link to a complete, generated list with zero
+    # cards. Accept only the observed empty-list template, not an arbitrary
+    # page from which no card blocks could be parsed.
+    if not soup.select('div.card'):
+        main = soup.select_one('#main')
+        heading = main.find('h1', recursive=False) if main else None
+        desc = main.select_one('.whisper-cardlist-descript') if main else None
+        toolbar = main.select_one('div.right') if main else None
+        children = main.find_all(recursive=False) if main else []
+        complete = re.search(rb'</body>\s*</html>\s*$', raw, re.I)
+        if (heading and heading.get_text(strip=True).endswith('カードリスト')
+                and desc and '自動的に生成されました' in desc.get_text()
+                and toolbar and any(re.fullmatch(r'\.\./[A-Z0-9]+\.txt', a.get('href', ''))
+                                    for a in toolbar.select('a[href]'))
+                and len(children) == 3 and all(x in (heading, toolbar, desc) for x in children)
+                and soup.select_one('#bottom #copyrights') and complete):
+            return []
+        raise ValueError('WHISPER empty card list is incomplete or unrecognized')
     records = []
     for card in soup.select('div.card'):
         # Separate faces may be separate blocks. Never flatten nested card containers.
@@ -297,7 +315,7 @@ def apply(cur, rows, state, helpers, e, report, client=None):
                               'eligibility_policy': 'missing-name-or-rules-including-fully-untranslated',
                               'max_parallel_requests': 1, 'minimum_interval_seconds': MIN_INTERVAL,
                               'request_limit': MAX_REQUESTS, 'page_cache_days': 30,
-                              'offline': client.offline, 'sets_checked': [], 'deferred_cards': []}
+                              'offline': client.offline, 'sets_checked': [], 'empty_sets': [], 'deferred_cards': []}
     pending = {oid for oid, row in rows.items() if target(row, state[oid][0], helpers, e)}
     info['eligible_cards'] = len(pending)
     if not pending:
@@ -326,6 +344,8 @@ def apply(cur, rows, state, helpers, e, report, client=None):
         if records is None:
             continue
         info['sets_checked'].append(url)
+        if not records:
+            info['empty_sets'].append(url)
         meta = client.used[url]
         source = {'kind': 'wisdom_guild', 'url': url, 'sha256': meta['sha256'],
                   'fetched_at': meta['fetched_at'], 'stale_cache': meta['stale'],
