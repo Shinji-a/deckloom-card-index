@@ -204,7 +204,7 @@ def parse_set(raw):
         # Adventure/split/transform faces can share a card container and footer.
         # Bound each face at the next direct heading; never mix rules or P/T.
         for a in headings:
-            match = re.search(r'/card/([A-Za-z0-9]+)/', a['href'])
+            match = re.search(r'/card/(_?[A-Za-z0-9]+)/', a['href'])
             if not match:
                 continue
             direct = []
@@ -224,7 +224,7 @@ def parse_set(raw):
             divs = [x.get_text(' ', strip=True) for x in direct if x.name == 'div']
             if not divs:
                 continue
-            type_match = re.fullmatch(r'(.*?)\s+([A-Z0-9]+),\s*(.*)', divs[0])
+            type_match = re.fullmatch(r'(.*?)\s+(_?[A-Z0-9]+),\s*(.*)', divs[0])
             if not type_match:
                 continue
             # Older readings use spacing dakuten, e.g. う゛, not only composed ゔ.
