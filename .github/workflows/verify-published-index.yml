@@ -63,7 +63,7 @@ jobs:
               if not name and body:
                   counts['body_present_name_missing'] += 1
               if not name and needed and not body:
-                  counts['both_missing_deferred'] += 1
+                  counts['both_missing'] += 1
               if w.target(row, faces, b, e):
                   counts['whisper_eligible_after_retention'] += 1
                   remaining.append({'oracle_id': row['oracle_id'], 'name': row['english_name'],
@@ -77,6 +77,12 @@ jobs:
           assert len(checks) == len(names)
           for row in checks:
               assert row['japanese_name'] and row['japanese_text'], row['english_name']
+          if audit['whisper'].get('eligibility_policy') == 'missing-name-or-rules-including-fully-untranslated':
+              from scripts.verify_japanese_cards import verify
+              checks.extend(verify(root / 'index.sqlite', [
+                  'Outland Liberator // Frenzied Trapbreaker',
+                  'Heliod, the Radiant Dawn // Heliod, the Warped Eclipse',
+                  'Clarion Conqueror', 'Far // Away', 'Marang River Regent // Coil and Catch']))
           godmaw = next(row for row in checks if row['english_name'] == 'Glacier Godmaw')
           assert '上陸' in godmaw['japanese_text']
 
@@ -107,7 +113,8 @@ jobs:
           print(json.dumps({k: v for k, v in result.items() if k not in ('remaining', 'checks')}, ensure_ascii=False))
           for row in checks:
               print(json.dumps({'english_name': row['english_name'], 'japanese_name': row['japanese_name'],
-                                'japanese_text_chars': len(row['japanese_text'])}, ensure_ascii=False))
+                                'japanese_text_chars': len(row.get('japanese_text', '')),
+                                'faces': row.get('faces')}, ensure_ascii=False))
           db.close()
           PY
       - name: Preserve compact inspection and cached sources
