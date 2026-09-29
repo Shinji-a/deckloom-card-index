@@ -95,6 +95,15 @@ jobs:
             dist/SOURCES.txt
           if-no-files-found: ignore
 
+      - name: Verify saved localization regression examples before publishing
+        if: github.ref == 'refs/heads/main'
+        run: |
+          python scripts/verify_japanese_cards.py dist/deckloom-card-index.sqlite \
+            "Outland Liberator // Frenzied Trapbreaker" \
+            "Heliod, the Radiant Dawn // Heliod, the Warped Eclipse" \
+            "Clarion Conqueror" "Far // Away" \
+            "Marang River Regent // Coil and Catch"
+
       - name: Show generated files
         run: |
           ls -lh dist/

@@ -254,8 +254,10 @@ def target(row, faces, helpers, e):
     missing = e.issues(faces, helpers)
     if not any(i['field'] in ('printed_name', 'printed_text') for i in missing):
         return False
-    # Whole-card name AND rules absent: deliberately deferred. Partial faces remain eligible.
-    return any(helpers.usable_japanese_value(f, k) for f in faces for k in ('printed_name','printed_text'))
+    # Eligibility must not depend on already having Japanese: identity is checked
+    # against the canonical English faces, set, mana cost and available P/T below.
+    # Each accepted field is still validated independently by apply_candidates.
+    return True
 
 
 def candidates(records, row, faces, set_codes, source, helpers):
@@ -292,6 +294,7 @@ def candidates(records, row, faces, set_codes, source, helpers):
 def apply(cur, rows, state, helpers, e, report, client=None):
     client = client or Client(offline=os.environ.get('DECKLOOM_WHISPER_OFFLINE') == '1')
     info = report['whisper'] = {'attribution': ATTRIBUTION, 'policy_url': POLICY,
+                              'eligibility_policy': 'missing-name-or-rules-including-fully-untranslated',
                               'max_parallel_requests': 1, 'minimum_interval_seconds': MIN_INTERVAL,
                               'request_limit': MAX_REQUESTS, 'page_cache_days': 30,
                               'offline': client.offline, 'sets_checked': [], 'deferred_cards': []}

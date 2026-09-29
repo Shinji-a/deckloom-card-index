@@ -4,10 +4,11 @@ The scheduled GitHub Actions build uses this priority:
 
 1. Scryfall selected Japanese printing and agreeing alternate Japanese printings.
 2. MTGJSON AtomicCards (same Oracle ID, layout and exact English face).
-3. Wisdom Guild / WHISPER cached **set card lists**, only for remaining Japanese
-   name/rules gaps on cards that already have at least one usable Japanese name
-   or rules field. A card missing both entirely is deferred. Partial faces remain
-   eligible. Art cards and tokens are excluded from WHISPER enrichment.
+3. Wisdom Guild / WHISPER cached **set card lists**, for remaining Japanese
+   name/rules gaps, including cards with no usable Japanese fields at all.
+   Normal, double-faced, split and Adventure cards use the same per-face matching
+   and per-field validation. Partial results remain usable; art cards and tokens
+   are excluded. Eligibility does not imply a successful identity/content match.
 4. Retain usable previous-release fields when the higher-priority sources cannot
    fill them. English face identity/layout must match, and rules/type fields
    additionally require unchanged corresponding English fields.
@@ -106,6 +107,15 @@ published release, verifies its hash and SQLite integrity, counts remaining gaps
 checks the reported Godmaw/Scanship/Zanarkand examples, and reuses all fresh cached
 pages with network forbidden. Its compact artifact is a post-publication receipt;
 the audit itself never requests WHISPER or changes the published database.
+
+Fully untranslated examples (Outland Liberator's two faces, Heliod's two faces,
+Clarion Conqueror, Far // Away and Marang River Regent's Adventure) are also
+read back from SQLite before main-branch publication and after publication.
+These names are inspection cases only, never translation overrides. The generic
+`scripts/verify_japanese_cards.py DATABASE "English Name" ...` checks every
+required field on each canonical face; `--require-whisper` additionally checks
+that each inspected field has persisted WHISPER provenance. PR builds remain
+offline and do not require sources that have not yet been cached.
 
 `japanese-coverage.json` remains explicitly a pre-enrichment Scryfall screening
 report. Use `japanese-enrichment.json` for final unresolved fields, deferred cards,

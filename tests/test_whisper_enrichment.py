@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts import build_index as b, japanese_enrichment as e, whisper_enrichment as w, previous_database as previous
+from scripts.verify_japanese_cards import verify
 
 
 HTML = '''<div class="whisper-cardlist-descript">Wisdom Guild</div>
@@ -172,10 +173,16 @@ class WhisperTests(unittest.TestCase):
             self.assertEqual(w.candidates(records, {}, [{**FACE, **changes}], {'tst'}, {}, b), [])
         self.assertEqual(w.candidates(records, {}, [FACE], {'bad'}, {}, b), [])
 
-    def test_missing_both_is_deferred_but_partial_face_is_eligible(self):
+    def test_fully_untranslated_faces_are_eligible_without_relaxing_exclusions(self):
         self.assertTrue(w.target({'layout':'normal'}, [FACE], b, e))
-        self.assertFalse(w.target({'layout':'normal'}, [{**FACE,'printed_name':None}], b, e))
-        self.assertFalse(w.target({'layout':'art_series'}, [FACE], b, e))
+        for layout in ('normal', 'transform', 'modal_dfc', 'meld', 'split', 'adventure'):
+            with self.subTest(layout=layout):
+                self.assertTrue(w.target({'layout':layout}, [{**FACE,'printed_name':None}], b, e))
+        for layout in ('art_series', 'token', 'double_faced_token'):
+            self.assertFalse(w.target({'layout':layout}, [FACE], b, e))
+        complete = {**FACE, 'printed_type_line':'クリーチャー',
+                    'printed_text':'トランプル\nこのクリーチャーが戦場に出たとき、カード１枚を引く。'}
+        self.assertFalse(w.target({'layout':'normal'}, [complete], b, e))
         self.assertTrue(w.target({'layout':'adventure'}, [FACE, {**FACE,'name':'Other','printed_name':None}], b, e))
 
     def test_conflicting_variants_are_not_chosen(self):
@@ -273,6 +280,64 @@ class WhisperTests(unittest.TestCase):
                 face={**FACE,'oracle_text':oracle};state={'id':([face],{'applied':[],'conflicts':[]})};report={}
                 previous.retain({'id':{'layout':'normal','english_name':'Test Beast'}},state,b,e,report,tmp)
                 self.assertEqual(face['printed_text'],expected)
+
+    def test_fully_untranslated_layouts_roundtrip_sqlite_with_face_sources(self):
+        for layout in ('normal', 'transform', 'split', 'adventure'):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                client = w.Client(root / 'cache', offline=True)
+                first = {k:v for k,v in FACE.items() if not k.startswith('printed_')}
+                second = {**first, 'name':'Test Other', 'mana_cost':'{U}',
+                          'type_line':'Sorcery', 'oracle_text':'Draw two cards.',
+                          'power':None, 'toughness':None}
+                faces = [first] if layout == 'normal' else [first, second]
+                other_html = HTML.replace(b'Test Beast', b'Test Other').replace(
+                    '試験獣'.encode(), '試験呪文'.encode()).replace(
+                    '(２)(緑)'.encode(), '(青)'.encode()).replace(
+                    'クリーチャー ― ビースト(Beast)'.encode(), 'ソーサリー'.encode()).replace(
+                    '<p>トランプル</p><p>このクリーチャーが戦場に出たとき、カード１枚を引く。</p>'.encode(),
+                    '<p>カード２枚を引く。</p>'.encode()).replace(b'<div>3/3</div>', b'')
+                pages = {w.INDEX: (''.join('<a href="/cardset/Set'+str(i)+'/">Set</a>' for i in range(10))+
+                                  '<a href="/cardset/Test/">Test</a>').encode(),
+                         w.ORIGIN+'/cardlist/Test/': HTML + (other_html if len(faces) == 2 else b'')}
+                for url, raw in pages.items():
+                    page, meta = client.paths(url)
+                    page.write_bytes(raw)
+                    meta.write_text(json.dumps({'url':url,'sha256':hashlib.sha256(raw).hexdigest(),'fetched_at':time.time()}))
+                db = sqlite3.connect(root / 'index.sqlite')
+                db.execute('CREATE TABLE cards(oracle_id PRIMARY KEY,english_name,layout,english_type_line,english_oracle_text,'
+                           'japanese_name,japanese_type_line,japanese_text,faces_json,japanese_faces_json,mana_cost,power,toughness)')
+                db.execute('CREATE TABLE card_sets(oracle_id,set_code,set_name)')
+                db.execute('CREATE TABLE card_aliases(oracle_id,alias,alias_folded,lang,source)')
+                db.execute('INSERT INTO cards VALUES(?,?,?,?,?,NULL,NULL,NULL,?,NULL,?,?,?)',
+                           ('id',' // '.join(f['name'] for f in faces),layout,first['type_line'],first['oracle_text'],
+                            json.dumps(faces) if len(faces) == 2 else None,first['mana_cost'],first['power'],first['toughness']))
+                db.execute("INSERT INTO card_sets VALUES('id','tst','Test')")
+                report = e.enrich(db.cursor(), b, e.Collector(b),
+                                  atomic_payload={'meta':{'date':'test'},'data':{}}, whisper_client=client)
+                db.commit(); db.close()
+                with sqlite3.connect(root / 'index.sqlite') as saved:
+                    saved.row_factory = sqlite3.Row
+                    row = dict(saved.execute('SELECT * FROM cards').fetchone())
+                    restored = e.row_faces(row)
+                    self.assertEqual([f['name'] for f in restored], [f['name'] for f in faces])
+                    self.assertEqual(e.issues(restored,b), [])
+                    self.assertIn('カード１枚', restored[0]['printed_text'])
+                    if len(faces) == 2:
+                        self.assertEqual(restored[1]['printed_text'], 'カード２枚を引く。')
+                        self.assertEqual(row['japanese_name'], '試験獣 // 試験呪文')
+                    self.assertEqual(row['english_oracle_text'], first['oracle_text'])
+                    sources = saved.execute('SELECT face,field,source_json FROM japanese_field_sources').fetchall()
+                    self.assertEqual(len(sources), 3 * len(faces))
+                    for face, field, source_json in sources:
+                        source = json.loads(source_json)
+                        self.assertEqual(source['kind'], 'wisdom_guild')
+                        self.assertEqual(source['attribution'], w.ATTRIBUTION)
+                        self.assertEqual(source['sha256'], hashlib.sha256(pages[source['url']]).hexdigest())
+                self.assertEqual(report['whisper']['requests'], 0)
+                self.assertEqual(report['unresolved'], [])
+                checked = verify(root / 'index.sqlite', [row['english_name']], require_whisper=True)
+                self.assertEqual(len(checked[0]['faces']), len(faces))
 
 
 if __name__ == '__main__':unittest.main()
