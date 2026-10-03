@@ -140,6 +140,36 @@ def set_key(value):
     return re.sub(r'^magicthegathering', '', value)
 
 
+def set_words(value):
+    value = unicodedata.normalize('NFKC', value or '')
+    value = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', value)
+    value = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', value)
+    return re.findall(r'[a-z0-9]+', value.casefold())
+
+
+def resolve_set_url(name, index):
+    exact = index.get(set_key(name))
+    if exact:
+        return exact, 'exact'
+    words = set_words(name)
+    # Discover a candidate only from an existing index link. A unique complete
+    # word sequence handles shorter source names, never arbitrary substrings.
+    # Short/generic and ambiguous names remain unresolved. This is routing only:
+    # the page's set code and every card's identity must still match below.
+    if not words or len(''.join(words)) < 6:
+        return None, 'unmapped'
+    urls = set()
+    for url in index.values():
+        slug = urllib.parse.urlsplit(url).path.strip('/').split('/')[-1]
+        source_words = set_words(slug)
+        if any(source_words[i:i + len(words)] == words
+               for i in range(len(source_words) - len(words) + 1)):
+            urls.add(url)
+    if len(urls) == 1:
+        return next(iter(urls)), 'unique_name_words'
+    return None, 'ambiguous' if urls else 'unmapped'
+
+
 def english_face_key(value):
     return unicodedata.normalize('NFKC', value).casefold()
 
@@ -313,6 +343,8 @@ def apply(cur, rows, state, helpers, e, report, client=None):
     client = client or Client(offline=os.environ.get('DECKLOOM_WHISPER_OFFLINE') == '1')
     info = report['whisper'] = {'attribution': ATTRIBUTION, 'policy_url': POLICY,
                               'eligibility_policy': 'missing-name-or-rules-including-fully-untranslated',
+                              'set_route_policy': 'exact-or-unique-name-words-with-verified-set-code',
+                              'fallback_routes': [], 'unmapped_sets': [],
                               'max_parallel_requests': 1, 'minimum_interval_seconds': MIN_INTERVAL,
                               'request_limit': MAX_REQUESTS, 'page_cache_days': 30,
                               'offline': client.offline, 'sets_checked': [], 'empty_sets': [], 'deferred_cards': []}
@@ -328,12 +360,23 @@ def apply(cur, rows, state, helpers, e, report, client=None):
         return
     by_url = defaultdict(set)
     card_sets = defaultdict(set)
+    fallback_routes = {}
+    unmapped_sets = set()
     for oid, code, name in cur.execute('SELECT oracle_id,set_code,set_name FROM card_sets'):
         if oid in pending:
             card_sets[oid].add(code)
-            url = index.get(set_key(name))
+            url, match = resolve_set_url(name, index)
             if url:
                 by_url[url].add(oid)
+                if match != 'exact':
+                    fallback_routes[(code, name, url)] = {
+                        'set_code': code, 'set_name': name, 'url': url,
+                        'match': match, 'verified_set_code': False}
+            else:
+                unmapped_sets.add((code, name, match))
+    info['fallback_routes'] = [fallback_routes[k] for k in sorted(fallback_routes)]
+    info['unmapped_sets'] = [{'set_code': code, 'set_name': name, 'reason': match}
+                             for code, name, match in sorted(unmapped_sets)]
     while pending and by_url:
         # Prefer cached pages, then the largest number of still-missing cards; stable tie break.
         url = min(by_url, key=lambda u: (not bool(client.cached(u)), -len(by_url[u] & pending), u))
@@ -344,6 +387,10 @@ def apply(cur, rows, state, helpers, e, report, client=None):
         if records is None:
             continue
         info['sets_checked'].append(url)
+        parsed_codes = {r['set'] for r in records}
+        for route in info['fallback_routes']:
+            if route['url'] == url:
+                route['verified_set_code'] = route['set_code'] in parsed_codes
         if not records:
             info['empty_sets'].append(url)
         meta = client.used[url]

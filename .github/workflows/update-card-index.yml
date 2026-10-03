@@ -128,6 +128,7 @@ jobs:
             "Heliod, the Radiant Dawn // Heliod, the Warped Eclipse" \
             "Clarion Conqueror" "Far // Away" \
             "Marang River Regent // Coil and Catch"
+          python scripts/verify_japanese_cards.py dist/deckloom-card-index.sqlite --set-code bot
 
       - name: Show generated files
         run: |
