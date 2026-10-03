@@ -84,6 +84,9 @@ jobs:
                   'Heliod, the Radiant Dawn // Heliod, the Warped Eclipse',
                   'Clarion Conqueror', 'Far // Away', 'Marang River Regent // Coil and Catch']))
           godmaw = next(row for row in checks if row['english_name'] == 'Glacier Godmaw')
+          if audit['whisper'].get('set_route_policy') == 'exact-or-unique-name-words-with-verified-set-code':
+              from scripts.verify_japanese_cards import verify
+              checks.extend(verify(root / 'index.sqlite', [], set_code='bot'))
           assert '上陸' in godmaw['japanese_text']
 
           def forbidden_network(*args, **kwargs):

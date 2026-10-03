@@ -13,10 +13,20 @@ else:
     import build_index as b, japanese_enrichment as e
 
 
-def verify(path, names, require_whisper=False):
+def verify(path, names, require_whisper=False, set_code=None):
     results = []
     with sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True) as db:
         db.row_factory = sqlite3.Row
+        names = list(names)
+        if set_code:
+            set_names = [r[0] for r in db.execute(
+                'SELECT c.english_name FROM cards c JOIN card_sets s USING(oracle_id) '
+                'WHERE s.set_code=? ORDER BY c.english_name', (set_code,))]
+            if not set_names:
+                raise ValueError('No cards in set: ' + set_code)
+            names = list(dict.fromkeys(names + set_names))
+        if not names:
+            raise ValueError('Supply card names or a set code')
         for name in names:
             records = db.execute('SELECT * FROM cards WHERE english_name=?', (name,)).fetchall()
             if len(records) != 1:
@@ -47,7 +57,8 @@ def verify(path, names, require_whisper=False):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('database')
-    parser.add_argument('names', nargs='+')
+    parser.add_argument('names', nargs='*')
+    parser.add_argument('--set-code', help='Verify every canonical card in a set')
     parser.add_argument('--require-whisper', action='store_true')
     args = parser.parse_args()
-    print(json.dumps(verify(args.database, args.names, args.require_whisper), ensure_ascii=False, indent=2))
+    print(json.dumps(verify(args.database, args.names, args.require_whisper, args.set_code), ensure_ascii=False, indent=2))

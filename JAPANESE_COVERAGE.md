@@ -50,8 +50,16 @@ request limits and response-body validation are unchanged. HTTP failures record
 status, content type, advertised alternatives and a bounded response excerpt so
 configuration problems are distinguishable from source restrictions.
 
-The set index and exact normalized set names discover URLs; no guessed numeric
-URLs or individually crawled card pages are used. Set selection prefers cached
+The set index and exact normalized set names discover URLs. When those names
+differ, a unique index slug containing the complete set-name word sequence may
+be used as a candidate route (at least six name characters). Ambiguous matches,
+short generic names and arbitrary substring matches remain unresolved. The
+candidate page must still contain the known set code, and every accepted card
+must pass the unchanged English-face, set-code, mana and P/T checks. Routing does
+not establish card identity. No per-card translations or set-name alias table is
+introduced. `whisper.fallback_routes` records discovered routes and whether the
+page's set code was verified; `whisper.unmapped_sets` records unresolved routes.
+No guessed numeric URLs or individually crawled card pages are used. Set selection prefers cached
 pages and then larger coverage of still-missing cards, with stable tie breaking.
 The request cap bounds work; it does **not** promise full coverage in one run.
 
@@ -128,6 +136,9 @@ These names are inspection cases only, never translation overrides. The generic
 required field on each canonical face; `--require-whisper` additionally checks
 that each inspected field has persisted WHISPER provenance. PR builds remain
 offline and do not require sources that have not yet been cached.
+The entire Transformers set (`--set-code bot`) is additionally inspected before
+publication and after publication of the new routing policy. Set codes/names here
+select validation cases only; they do not supply translations or source aliases.
 
 `japanese-coverage.json` remains explicitly a pre-enrichment Scryfall screening
 report. Use `japanese-enrichment.json` for final unresolved fields, deferred cards,

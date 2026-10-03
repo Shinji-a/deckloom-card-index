@@ -30,6 +30,43 @@ EMPTY_HTML = '''<html><body><div id="main"><h1>Test カードリスト</h1>
 
 
 class WhisperTests(unittest.TestCase):
+    def test_unique_complete_name_words_route_but_exact_match_wins(self):
+        source = w.ORIGIN + '/cardlist/TheBrothersWarTransformersCards/'
+        index = {w.set_key('TheBrothersWarTransformersCards'): source}
+        self.assertEqual(w.resolve_set_url('Transformers', index), (source, 'unique_name_words'))
+        for name in ('Transformer', 'War', 'Brothers Transformers'):
+            self.assertIsNone(w.resolve_set_url(name, index)[0])
+        other = w.ORIGIN + '/cardlist/TransformersCommander/'
+        index['transformerscommander'] = other
+        self.assertEqual(w.resolve_set_url('Transformers', index), (None, 'ambiguous'))
+        exact = w.ORIGIN + '/cardlist/Transformers/'
+        index['transformers'] = exact
+        self.assertEqual(w.resolve_set_url('Transformers', index), (exact, 'exact'))
+
+    def test_discovered_page_wrong_set_code_cannot_supply_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = w.Client(tmp, offline=True)
+            pages = {w.INDEX: (''.join('<a href="/cardset/Set'+str(i)+'/">Set</a>' for i in range(10))+
+                               '<a href="/cardset/SupplementTestBeastsCards/">Test</a>').encode(),
+                     w.ORIGIN+'/cardlist/SupplementTestBeastsCards/': HTML}
+            for url, raw in pages.items():
+                page, meta = client.paths(url)
+                page.write_bytes(raw)
+                meta.write_text(json.dumps({'url':url,'sha256':hashlib.sha256(raw).hexdigest(),'fetched_at':time.time()}))
+            db = sqlite3.connect(':memory:')
+            db.execute('CREATE TABLE card_sets(oracle_id,set_code,set_name)')
+            db.execute("INSERT INTO card_sets VALUES('id','wrong','Test Beasts')")
+            face = {**FACE, 'printed_name':None}
+            state = {'id':([face], {'applied':[], 'conflicts':[]})}
+            report = {}
+            w.apply(db.cursor(), {'id':{'layout':'normal'}}, state, b, e, report, client)
+            self.assertIsNone(face['printed_name'])
+            self.assertIsNone(face['printed_text'])
+            self.assertFalse(report['whisper']['fallback_routes'][0]['verified_set_code'])
+            self.assertEqual(report['whisper']['deferred_cards'], ['id'])
+            self.assertEqual(client.requests, 0)
+            db.close()
+
     def test_complete_empty_set_is_cached_without_halting_later_requests(self):
         self.assertEqual(w.parse_set(EMPTY_HTML), [])
         with tempfile.TemporaryDirectory() as tmp:
@@ -336,8 +373,8 @@ class WhisperTests(unittest.TestCase):
                     '<p>トランプル</p><p>このクリーチャーが戦場に出たとき、カード１枚を引く。</p>'.encode(),
                     '<p>カード２枚を引く。</p>'.encode()).replace(b'<div>3/3</div>', b'')
                 pages = {w.INDEX: (''.join('<a href="/cardset/Set'+str(i)+'/">Set</a>' for i in range(10))+
-                                  '<a href="/cardset/Test/">Test</a>').encode(),
-                         w.ORIGIN+'/cardlist/Test/': HTML + (other_html if len(faces) == 2 else b'')}
+                                  '<a href="/cardset/SupplementTestBeastsCards/">Test</a>').encode(),
+                         w.ORIGIN+'/cardlist/SupplementTestBeastsCards/': HTML + (other_html if len(faces) == 2 else b'')}
                 for url, raw in pages.items():
                     page, meta = client.paths(url)
                     page.write_bytes(raw)
@@ -350,7 +387,7 @@ class WhisperTests(unittest.TestCase):
                 db.execute('INSERT INTO cards VALUES(?,?,?,?,?,NULL,NULL,NULL,?,NULL,?,?,?)',
                            ('id',' // '.join(f['name'] for f in faces),layout,first['type_line'],first['oracle_text'],
                             json.dumps(faces) if len(faces) == 2 else None,first['mana_cost'],first['power'],first['toughness']))
-                db.execute("INSERT INTO card_sets VALUES('id','tst','Test')")
+                db.execute("INSERT INTO card_sets VALUES('id','tst','Test Beasts')")
                 report = e.enrich(db.cursor(), b, e.Collector(b),
                                   atomic_payload={'meta':{'date':'test'},'data':{}}, whisper_client=client)
                 db.commit(); db.close()
@@ -373,9 +410,13 @@ class WhisperTests(unittest.TestCase):
                         self.assertEqual(source['attribution'], w.ATTRIBUTION)
                         self.assertEqual(source['sha256'], hashlib.sha256(pages[source['url']]).hexdigest())
                 self.assertEqual(report['whisper']['requests'], 0)
+                self.assertTrue(report['whisper']['fallback_routes'][0]['verified_set_code'])
                 self.assertEqual(report['unresolved'], [])
                 checked = verify(root / 'index.sqlite', [row['english_name']], require_whisper=True)
                 self.assertEqual(len(checked[0]['faces']), len(faces))
+                self.assertEqual(verify(root / 'index.sqlite', [], set_code='tst'), checked)
+                with self.assertRaises(ValueError):
+                    verify(root / 'index.sqlite', [], set_code='absent')
 
 
 if __name__ == '__main__':unittest.main()
