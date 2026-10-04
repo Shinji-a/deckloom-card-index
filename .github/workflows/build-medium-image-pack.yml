@@ -1,6 +1,12 @@
 name: Build DeckLoom Medium Image Pack
 
 on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/build-medium-image-pack.yml"]
+  schedule:
+    # Monday 04:17 UTC = Monday 13:17 JST, one day after Small.
+    - cron: "17 4 * * 1"
   workflow_dispatch:
     inputs:
       max_images:
@@ -46,19 +52,44 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - name: Install Pillow
-        run: python -m pip install --disable-pip-version-check pillow
+      - name: Install dependencies and verify image builder startup
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt pillow
+          python tools/build_medium_image_pack.py --help
+      - name: Resolve run mode
+        id: mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_MAX: ${{ inputs.max_images }}
+          INPUT_WIDTH: ${{ inputs.width }}
+          INPUT_QUALITY: ${{ inputs.quality }}
+          INPUT_WORKERS: ${{ inputs.workers }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: |
+          if [ "$EVENT_NAME" = "schedule" ] || [ "$EVENT_NAME" = "push" ]; then
+            echo "max_images=0" >> "$GITHUB_OUTPUT"
+            echo "width=400" >> "$GITHUB_OUTPUT"
+            echo "quality=80" >> "$GITHUB_OUTPUT"
+            echo "workers=4" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "max_images=${INPUT_MAX:-500}" >> "$GITHUB_OUTPUT"
+            echo "width=${INPUT_WIDTH:-400}" >> "$GITHUB_OUTPUT"
+            echo "quality=${INPUT_QUALITY:-80}" >> "$GITHUB_OUTPUT"
+            echo "workers=${INPUT_WORKERS:-4}" >> "$GITHUB_OUTPUT"
+            echo "publish=${INPUT_PUBLISH:-false}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build Medium pack
         env:
-          MAX_IMAGES: ${{ inputs.max_images }}
-          WIDTH: ${{ inputs.width }}
-          QUALITY: ${{ inputs.quality }}
-          WORKERS: ${{ inputs.workers }}
+          MAX_IMAGES: ${{ steps.mode.outputs.max_images }}
+          WIDTH: ${{ steps.mode.outputs.width }}
+          QUALITY: ${{ steps.mode.outputs.quality }}
+          WORKERS: ${{ steps.mode.outputs.workers }}
         run: python tools/build_medium_image_pack.py --max-images "$MAX_IMAGES" --width "$WIDTH" --quality "$QUALITY" --workers "$WORKERS"
       - name: Validate publish request
-        if: inputs.publish == true
+        if: steps.mode.outputs.publish == 'true'
         env:
-          MAX_IMAGES: ${{ inputs.max_images }}
+          MAX_IMAGES: ${{ steps.mode.outputs.max_images }}
         run: |
           if [ "$MAX_IMAGES" != "0" ]; then
             echo "Refusing to publish a partial Medium image pack."
@@ -69,7 +100,7 @@ jobs:
         run: |
           if [ -f dist/medium-image-pack/summary.md ]; then cat dist/medium-image-pack/summary.md >> "$GITHUB_STEP_SUMMARY"; fi
       - name: Create Medium release if missing
-        if: inputs.publish == true
+        if: steps.mode.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -77,7 +108,7 @@ jobs:
             gh release create medium-image-pack-latest --title "DeckLoom Medium Image Pack - Latest" --notes "Optional 400px WebP card-image pack. Japanese paper printings are mandatory for cards."
           fi
       - name: Upload Medium release
-        if: inputs.publish == true
+        if: steps.mode.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload medium-image-pack-latest dist/medium-image-pack/deckloom-medium-images.zip dist/medium-image-pack/medium-image-manifest.json dist/medium-image-pack/medium-image-pack-meta.json --clobber
