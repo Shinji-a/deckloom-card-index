@@ -59,13 +59,29 @@ jobs:
 
       - name: Restore verified previous release and durable WHISPER cache
         run: |
-          mkdir -p previous
-          gh release download card-index-latest --dir previous \
-            --pattern manifest.json --pattern deckloom-card-index.sqlite.gz --pattern japanese-enrichment.json
-          if gh release view card-index-latest --json assets --jq '.assets[].name' | grep -qx 'whisper-cache.tar.gz'; then
-            gh release download card-index-latest --dir previous --pattern whisper-cache.tar.gz
+          snapshot=$(mktemp -d)
+          if gh release download card-index-latest --dir "$snapshot" \
+            --pattern manifest.json --pattern deckloom-card-index.sqlite.gz \
+            --pattern japanese-enrichment.json --pattern whisper-cache.tar.gz &&
+            test -s "$snapshot/japanese-enrichment.json" &&
+            python -c 'import sys; from scripts.previous_database import prepare; prepare(sys.argv[1])' "$snapshot"; then
+            mv "$snapshot" previous
+          else
+            echo "::warning::Published assets are incomplete or inconsistent. Restoring the latest successful main run."
+            successful_run=$(gh run list --workflow update-card-index.yml --branch main \
+              --status success --limit 20 --json databaseId,event \
+              --jq 'map(select(.event == "push" or .event == "schedule" or .event == "workflow_dispatch")) | .[0].databaseId // empty')
+            if [ -z "$successful_run" ]; then
+              echo "::error::No successful main run was found for recovery."
+              exit 1
+            fi
+            recovery_snapshot=$(mktemp -d)
+            gh run download "$successful_run" --name japanese-db-audit --dir "$recovery_snapshot"
+            test -s "$recovery_snapshot/japanese-enrichment.json"
+            python -c 'import sys; from scripts.previous_database import prepare; prepare(sys.argv[1])' "$recovery_snapshot"
+            mv "$recovery_snapshot" previous
+            echo "Restored verified snapshot from run $successful_run."
           fi
-          python scripts/previous_database.py
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -147,14 +163,34 @@ jobs:
       - name: Upload latest database
         if: github.ref == 'refs/heads/main'
         run: |
-          gh release upload card-index-latest \
+          upload_asset() {
+            local file=$1 output status attempt
+            for attempt in 1 2 3; do
+              if output=$(gh release upload card-index-latest "$file" --clobber 2>&1); then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              printf '%s\n' "$output" >&2
+              if [ "$attempt" -eq 3 ] || ! grep -Eq 'HTTP (429|5[0-9]{2})\b' <<< "$output"; then
+                return "$status"
+              fi
+              echo "::warning::Transient GitHub error uploading $file; retrying."
+              sleep "$((attempt * 10))"
+            done
+          }
+
+          for file in \
             dist/deckloom-card-index.sqlite \
             dist/deckloom-card-index.sqlite.gz \
             dist/japanese-coverage.json \
             dist/japanese-enrichment.json \
             dist/whisper-cache.tar.gz \
-            dist/SOURCES.txt \
-            --clobber
-          gh release upload card-index-latest dist/manifest.json --clobber
+            dist/SOURCES.txt; do
+            upload_asset "$file"
+          done
+          # Commit the new manifest only after every payload has uploaded.
+          upload_asset dist/manifest.json
         env:
           GH_TOKEN: ${{ github.token }}
